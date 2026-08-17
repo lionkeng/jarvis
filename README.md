@@ -1,6 +1,6 @@
 # Jarvis Voice Visualization
 
-An embeddable, framework-neutral voice visualization driven by the remote audio track from an OpenAI Realtime WebRTC session. The repository is a pnpm workspace; the credential-minting BFF runs on Bun.
+An embeddable, framework-neutral voice visualization driven by the remote audio track from an OpenAI Realtime WebRTC session. The repository is a pnpm workspace; the credential-minting BFF runs on Bun. Visualization code and ideas are sourced from [here](https://github.com/0xtigerclaw/audio_visualization_pretext).
 
 ## Packages
 
