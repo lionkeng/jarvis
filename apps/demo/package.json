@@ -1,0 +1,19 @@
+{
+  "name": "@jarvis-viz/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite",
+    "typecheck": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite build"
+  },
+  "dependencies": {
+    "@jarvis-viz/core": "workspace:*",
+    "@jarvis-viz/react": "workspace:*",
+    "@jarvis-viz/wc": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

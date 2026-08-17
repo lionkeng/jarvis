@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+output/
+playwright-report/
+test-results/
+.captures/
+.playwright-cli/
+.pnpm-store/
+.claude/
+server/.env
+.env
+*.tgz
