@@ -1,0 +1,27 @@
+{
+  "name": "jarvis-voice-viz-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "scripts": {
+    "dev": "pnpm --filter @jarvis-viz/demo dev",
+    "dev:server": "pnpm --filter @jarvis-viz/server dev",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:packages": "node scripts/check-packages.mjs",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "build": "pnpm -r --if-present build",
+    "verify": "pnpm check:boundaries && pnpm typecheck && pnpm test && pnpm build && pnpm check:packages"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "jsdom": "^27.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^7.0.2",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.10"
+  }
+}

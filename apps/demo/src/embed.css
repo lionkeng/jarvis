@@ -1,0 +1,13 @@
+:root { background: #f4efe4; }
+body { margin: 0; padding: 32px; }
+body * { box-sizing: content-box; color: #ff145b; font: 900 42px/1 cursive; letter-spacing: .2em; }
+body canvas { width: 1px !important; height: 1px !important; display: none !important; }
+.host-marker { margin: 0 0 24px; }
+jarvis-voice-viz {
+  display: block;
+  width: min(800px, calc(100vw - 64px));
+  height: 600px;
+  padding: 0;
+  border: 18px dashed #ff145b;
+  letter-spacing: normal;
+}
