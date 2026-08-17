@@ -23,7 +23,7 @@ pnpm verify
 pnpm dev
 ```
 
-The simulation mode requires no credentials. For a live session, copy `server/.env.example` to `server/.env`, set `OPENAI_API_KEY`, then run:
+The simulation mode requires no credentials. For a live session, copy `server/.env.example` to `server/.env`, set `OPENAI_API_KEY`, and the `OPENAI_REALTIME_MODEL` then run:
 
 ```bash
 pnpm dev:server
