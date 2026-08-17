@@ -3,7 +3,7 @@ import { createSessionRoute } from "./session.js";
 import type { ServerConfig } from "../config.js";
 
 const config: ServerConfig = {
-  apiKey: "test-key", model: "gpt-realtime-2.1-mini", allowedOrigins: ["https://voice.example"], port: 3001,
+  apiKey: "test-key", model: "gpt-realtime-2.1-mini", allowedOrigins: ["https://voice.example"], port: 3010,
   rateLimitRequests: 1, rateLimitWindowMs: 60_000, sessionBudgetRequests: 10, sessionBudgetWindowMs: 3_600_000,
   maxOutputTokens: 512, contextTokenLimit: 4000,
 };

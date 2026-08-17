@@ -29,7 +29,12 @@ The simulation mode requires no credentials. For a live session, copy `server/.e
 pnpm dev:server
 ```
 
-Open the demo, select **OpenAI live**, and connect the primary host to `http://localhost:3001/session`.
+OR, to run both demo and the server,
+```bash
+pnpm dev:all
+```
+
+Open the demo, select **OpenAI live**, and connect the primary host to `http://localhost:3010/session`.
 
 ## Core usage
 
@@ -99,9 +104,9 @@ During local development, `/embed.html` is a reproducible web-component host pag
 deliberately hostile global canvas and typography CSS. The internal canvas remains isolated by
 the component's Shadow DOM.
 
-## Bun BFF
+## Bun BFF (Backend For Frontend)
 
-The BFF is deliberately private and stateless. Copy `server/.env.example` to `server/.env`,
+The BFF is deliberately simple for demo purposes. It has no application auth, and a small in-memory footprint for session rate-limit and session-budget state. Copy `server/.env.example` to `server/.env`,
 set the API key and exact allowed origins, then run `pnpm dev:server`. Production builds use:
 
 ```bash

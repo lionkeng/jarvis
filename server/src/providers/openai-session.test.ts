@@ -25,7 +25,7 @@ describe("createOpenAIClientSecret", () => {
       delay: "low",
     });
     expect(body.session.audio.input.turn_detection.eagerness).toBe("high");
-    expect(body.session.audio.output).toEqual({ voice: "marin", speed: 1.15 });
+    expect(body.session.audio.output).toEqual({ voice: "echo", speed: 1.15 });
     expect(body.session.truncation.token_limits.post_instructions).toBe(4000);
     expect((request?.headers as Record<string, string>).Authorization).toBe("Bearer server-key");
   });

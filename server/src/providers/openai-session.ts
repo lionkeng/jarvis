@@ -50,7 +50,7 @@ export async function createOpenAIClientSecret(apiKey: string, policy: OpenAISes
             },
             turn_detection: { type: "semantic_vad", eagerness: timing.vadEagerness, create_response: true, interrupt_response: true },
           },
-          output: { voice: "marin", speed: policy.preferences.speechRate },
+          output: { voice: "echo", speed: policy.preferences.speechRate },
         },
         truncation: {
           type: "retention_ratio",

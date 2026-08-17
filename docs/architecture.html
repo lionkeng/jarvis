@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Jarvis architecture</title>
+  <style>
+    :root { --ink:#e7f4f0; --muted:#9eb9b5; --dim:#63827d; --line:#24433f; --panel:#0d1b1a; --panel-2:#102724; --ground:#06100f; --cyan:#5be5d0; --amber:#f5bd6b; --red:#ff8a8a; --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; --sans:Inter, ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; background:var(--ground); }
+    body { margin:0; color:var(--ink); background:radial-gradient(circle at 80% 0%, #143531 0, transparent 28rem), var(--ground); font:16px/1.55 var(--sans); }
+    a { color:var(--cyan); text-underline-offset:3px; }
+    a:focus-visible, button:focus-visible { outline:3px solid var(--amber); outline-offset:4px; }
+    code, kbd { font-family:var(--mono); font-size:.9em; color:#bdf8ed; }
+    .shell { width:min(1480px, 100%); margin:auto; padding:0 32px 72px; }
+    .masthead { min-height:300px; display:grid; align-content:center; grid-template-columns:minmax(0, 1fr) minmax(240px, .55fr); gap:40px; border-bottom:1px solid var(--line); }
+    .eyebrow, .label { margin:0 0 12px; color:var(--cyan); font:700 12px/1.2 var(--mono); letter-spacing:.14em; text-transform:uppercase; }
+    h1, h2, h3, p { margin-top:0; }
+    h1 { max-width:900px; margin-bottom:16px; font-size:clamp(2.6rem, 7vw, 6.4rem); letter-spacing:-.07em; line-height:.9; }
+    h2 { margin-bottom:18px; font-size:clamp(1.65rem, 3.1vw, 2.7rem); letter-spacing:-.045em; line-height:1.05; }
+    h3 { font-size:1rem; margin-bottom:7px; }
+    .lede { max-width:50ch; font-size:1.13rem; color:#cae1dc; }
+    .card, .note { border:1px solid var(--line); background:linear-gradient(135deg, rgba(16,39,36,.94), rgba(7,19,18,.88)); box-shadow:0 16px 42px rgba(0,0,0,.18); }
+    .mast-facts { align-self:center; padding:20px; border-left:2px solid var(--cyan); }
+    .mast-facts span { display:block; color:var(--muted); font-size:.9rem; }
+    .mast-facts strong { display:block; margin:2px 0 14px; font:700 1rem var(--mono); }
+    .body-grid { display:grid; grid-template-columns:220px minmax(0, 1fr); gap:clamp(32px, 6vw, 88px); }
+    nav { position:sticky; top:0; height:100vh; padding:36px 0; align-self:start; }
+    nav p { margin-bottom:12px; color:var(--dim); font:700 11px var(--mono); letter-spacing:.13em; text-transform:uppercase; }
+    nav a { display:block; padding:7px 0 7px 14px; color:var(--muted); border-left:1px solid var(--line); text-decoration:none; font-size:.9rem; }
+    nav a:hover, nav a[aria-current="true"] { color:var(--ink); border-color:var(--cyan); }
+    main { min-width:0; }
+    section { padding:76px 0; border-bottom:1px solid var(--line); scroll-margin-top:16px; }
+    .section-intro { max-width:75ch; color:var(--muted); }
+    .grid { display:grid; gap:18px; }
+    .two { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .three { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .card { padding:20px; }
+    .card p:last-child { margin-bottom:0; }
+    .number { color:var(--cyan); font:700 12px var(--mono); letter-spacing:.1em; }
+    .diagram { margin:28px 0 14px; padding:20px; overflow:auto; border:1px solid var(--line); background:#071514; }
+    svg { display:block; width:100%; min-width:760px; height:auto; }
+    .diagram-note { max-width:82ch; padding-left:16px; border-left:2px solid var(--cyan); color:var(--muted); }
+    .legend { display:flex; flex-wrap:wrap; gap:12px 18px; padding:0; list-style:none; color:var(--muted); font-size:.88rem; }
+    .legend i { display:inline-block; width:11px; height:11px; margin-right:6px; border-radius:50%; background:var(--cyan); }
+    .legend .variable { background:var(--amber); }
+    .legend .local { background:#778f8a; }
+    .path { display:inline-block; margin:3px 0; padding:3px 7px; border:1px solid #28544e; background:#0a211f; }
+    .path::before { content:"/"; color:var(--dim); }
+    .module-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:1px; background:var(--line); border:1px solid var(--line); }
+    .module-list article { padding:20px; background:var(--panel); }
+    .module-list p { color:var(--muted); font-size:.94rem; }
+    .tree { margin:24px 0 0; padding:22px; overflow:auto; border:1px solid var(--line); background:#071514; color:#c6ddd8; font:14px/1.7 var(--mono); white-space:pre; }
+    .tree code { color:inherit; }
+    .sequence { display:grid; gap:0; margin-top:24px; border:1px solid var(--line); }
+    .sequence article { display:grid; grid-template-columns:116px minmax(0, 1fr) minmax(170px, .35fr); gap:18px; padding:18px; border-bottom:1px solid var(--line); background:var(--panel); }
+    .sequence article:last-child { border-bottom:0; }
+    .sequence time { color:var(--cyan); font:700 12px var(--mono); }
+    .sequence .timing { color:var(--amber); font:12px/1.45 var(--mono); }
+    .state-flow { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:20px; }
+    .state { padding:8px 10px; border:1px solid var(--line); background:var(--panel); font:700 12px var(--mono); }
+    .arrow { color:var(--dim); }
+    .state.error { border-color:#8d4747; color:var(--red); }
+    .pipeline { counter-reset:pipe; display:grid; gap:12px; margin-top:24px; }
+    .pipeline article { position:relative; padding:18px 18px 18px 60px; border-left:1px solid var(--cyan); background:rgba(16,39,36,.65); }
+    .pipeline article::before { counter-increment:pipe; content:counter(pipe, decimal-leading-zero); position:absolute; left:16px; top:18px; color:var(--cyan); font:700 12px var(--mono); }
+    table { width:100%; border-collapse:collapse; font-size:.92rem; }
+    th, td { padding:12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--cyan); font:700 11px var(--mono); letter-spacing:.08em; text-transform:uppercase; }
+    td { color:var(--muted); }
+    td:first-child { color:var(--ink); }
+    .warning { padding:18px 20px; border-left:3px solid var(--amber); background:rgba(88,59,25,.23); }
+    .warning strong { color:#ffd89a; }
+    footer { padding:30px 0; color:var(--dim); font-size:.9rem; }
+    @media (max-width:900px) { .masthead, .body-grid { grid-template-columns:1fr; } nav { position:sticky; z-index:2; display:flex; gap:14px; overflow:auto; height:auto; padding:12px 0; background:rgba(6,16,15,.94); backdrop-filter:blur(10px); } nav p { display:none; } nav a { white-space:nowrap; padding:7px 0; border-left:0; border-bottom:1px solid var(--line); } nav a:hover, nav a[aria-current="true"] { border-color:var(--cyan); } .two, .three, .module-list { grid-template-columns:1fr; } }
+    @media (max-width:640px) { .shell { padding:0 18px 48px; } .masthead { min-height:0; padding:72px 0 36px; } section { padding:52px 0; } .sequence article { grid-template-columns:1fr; gap:7px; } .diagram { padding:12px; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
+    @media print { :root { --ink:#111; --muted:#384643; --line:#9bb1ab; --panel:#fff; --ground:#fff; --cyan:#066b5e; } body { background:#fff; color:#111; font-size:10pt; } .shell { width:100%; padding:0; } .masthead { min-height:0; padding:0 0 18pt; } nav { display:none; } section { padding:24pt 0; break-inside:avoid; } .card, .diagram { box-shadow:none; background:#fff; } a { color:#075e53; } .diagram { overflow:visible; } svg { min-width:0; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">Jarvis Voice Visualization architecture note</p>
+        <h1>Audio is the clock.</h1>
+        <p class="lede">Jarvis is a browser visualization library with a small Bun session service. The browser talks to the service once for a short-lived secret, then speaks directly with OpenAI over WebRTC. Remote agent audio drives both the canvas and the paced transcript.</p>
+      </div>
+      <aside class="mast-facts card" aria-label="Runtime facts">
+        <span>Workspace</span><strong>pnpm + TypeScript</strong>
+        <span>Browser media path</span><strong>WebRTC + Web Audio</strong>
+        <span>Session boundary</span><strong>Bun BFF on port 3010</strong>
+        <span>Rendering path</span><strong>Canvas 2D + rAF</strong>
+      </aside>
+    </header>
+
+    <div class="body-grid">
+      <nav aria-label="Architecture sections">
+        <p>On this page</p>
+        <a href="#system">System shape</a>
+        <a href="#layout">Code layout</a>
+        <a href="#modules">Modules</a>
+        <a href="#conversation">Conversation timing</a>
+        <a href="#states">State sequence</a>
+        <a href="#visualization">Visualization frame</a>
+        <a href="#text">Audio-paced text</a>
+        <a href="#simulation">Simulation</a>
+        <a href="#gotchas">Gotchas</a>
+      </nav>
+
+      <main>
+        <section id="system" aria-labelledby="system-title">
+          <p class="label">ArchitectureMap boundaries</p>
+          <h2 id="system-title">The API key stops at the BFF.</h2>
+          <p class="section-intro">The public packages own browser behavior. The server owns the long-lived OpenAI API key and turns it into an ephemeral client secret. After that handoff, the browser exchanges SDP, microphone audio, remote audio, and realtime events directly with OpenAI.</p>
+          <div class="diagram" role="group" aria-labelledby="graph-title graph-desc">
+            <svg viewBox="0 0 1060 470" role="img" aria-labelledby="graph-title graph-desc">
+              <title id="graph-title">Jarvis component graph</title>
+              <desc id="graph-desc">The demo or consumer mounts core through React or a custom element. Core fetches an ephemeral secret from the Bun BFF. The browser then opens a WebRTC connection to OpenAI. Remote audio feeds the Web Audio analyser, VoiceFeatures, canvas presets, and audio-paced text.</desc>
+              <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#5be5d0"/></marker><marker id="arrowAmber" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5bd6b"/></marker></defs>
+              <g fill="none" stroke="#24433f" stroke-width="1"><path d="M80 78H980M80 394H980"/></g>
+              <g font-family="ui-monospace, monospace" font-size="12" fill="#9eb9b5"><text x="82" y="56">YOUR APPLICATION</text><text x="82" y="370">PROVIDER NETWORK</text></g>
+              <g fill="#0d1b1a" stroke="#5be5d0" stroke-width="1.5"><rect x="88" y="105" width="175" height="102" rx="4"/><rect x="333" y="105" width="182" height="102" rx="4"/><rect x="584" y="105" width="190" height="102" rx="4"/><rect x="845" y="105" width="132" height="102" rx="4"/></g>
+              <g font-family="ui-monospace, monospace" font-size="14" fill="#e7f4f0"><text x="109" y="139">demo or consumer</text><text x="354" y="139">core VoiceViz</text><text x="603" y="139">Bun BFF</text><text x="867" y="139">OpenAI</text></g>
+              <g font-family="ui-sans-serif, system-ui" font-size="12" fill="#9eb9b5"><text x="109" y="165">React or custom element</text><text x="109" y="184">mount target</text><text x="354" y="165">transport, state, canvas</text><text x="354" y="184">text, transcript</text><text x="603" y="165">origin guard, limits</text><text x="603" y="184">client secret minting</text><text x="867" y="165">Realtime API</text><text x="867" y="184">SDP and media</text></g>
+              <path d="M263 156H333" stroke="#5be5d0" stroke-width="2" marker-end="url(#arrow)"/><path d="M515 135H584" stroke="#5be5d0" stroke-width="2" marker-end="url(#arrow)"/><path d="M584 178H515" stroke="#5be5d0" stroke-width="2" marker-end="url(#arrow)"/>
+              <path d="M774 135H845" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrowAmber)"/><path d="M845 178H774" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrowAmber)"/>
+              <g font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0"><text x="529" y="124">POST /session</text><text x="528" y="197">client secret</text></g>
+              <g font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b"><text x="781" y="124">WebRTC SDP</text><text x="782" y="197">audio + events</text></g>
+              <g fill="#102724" stroke="#63827d"><rect x="225" y="263" width="212" height="62" rx="4"/><rect x="474" y="263" width="212" height="62" rx="4"/></g>
+              <g font-family="ui-monospace, monospace" font-size="13" fill="#e7f4f0"><text x="246" y="290">MediaStreamAnalyser</text><text x="494" y="290">VoiceFeatures → paint</text></g>
+              <g font-family="ui-sans-serif, system-ui" font-size="11" fill="#9eb9b5"><text x="246" y="310">FFT and waveform bytes</text><text x="494" y="310">presets, panel, transcript</text></g>
+              <path d="M680 207C680 238 651 246 581 263" fill="none" stroke="#5be5d0" stroke-width="2" marker-end="url(#arrow)"/><path d="M437 294H474" stroke="#5be5d0" stroke-width="2" marker-end="url(#arrow)"/>
+            </svg>
+          </div>
+          <p class="diagram-note">Solid cyan lines stay inside the application. The amber dashed link is provider and network work. Its timing varies by network, browser permissions, ICE negotiation, model processing, voice generation, and playout. The page does not claim an end-to-end latency.</p>
+          <ul class="legend" aria-label="Diagram legend"><li><i></i>Local module boundary</li><li><i class="variable"></i>Provider or network boundary with variable timing</li><li><i class="local"></i>Browser media and render work</li></ul>
+        </section>
+
+        <section id="layout" aria-labelledby="layout-title">
+          <p class="label">Repository map</p>
+          <h2 id="layout-title">Packages mirror the runtime boundaries.</h2>
+          <p class="section-intro">The workspace keeps the library independent of React and custom elements. The demo is a host application. The server is a separate private BFF.</p>
+          <pre class="tree" aria-label="Repository tree"><code>apps/
+  demo/                  <span data-source="apps/demo/src/App.tsx">React laboratory and live-session controls</span>
+packages/
+  core/                  <span data-source="packages/core/src/voice-viz.ts">framework-neutral VoiceViz runtime</span>
+  react/                 <span data-source="packages/react/src/voice-viz-canvas.tsx">React lifecycle adapter</span>
+  wc/                    <span data-source="packages/wc/src/voice-viz-element.ts">Shadow DOM custom element</span>
+server/                  <span data-source="server/src/index.ts">Bun BFF entry point</span>
+scripts/                 <span data-source="scripts/check-boundaries.mjs">workspace checks</span></code></pre>
+          <div class="grid two" style="margin-top:18px">
+            <article class="card"><p class="number">PUBLIC LIBRARY</p><h3>Core owns behavior</h3><p><code class="path" data-source="packages/core/src/voice-viz.ts">packages/core/src/voice-viz.ts</code> mounts the canvas, routes normalized realtime events, owns the state machine, attaches remote audio, and runs the per-frame loop.</p></article>
+            <article class="card"><p class="number">PRIVATE SERVICE</p><h3>The BFF owns the secret</h3><p><code class="path" data-source="server/src/routes/session.ts">server/src/routes/session.ts</code> checks request method and origin, applies in-memory limits, parses preferences, and asks OpenAI for a client secret.</p></article>
+          </div>
+        </section>
+
+        <section id="modules" aria-labelledby="modules-title">
+          <p class="label">Module ownership</p>
+          <h2 id="modules-title">Each module owns one piece of the path.</h2>
+          <div class="module-list">
+            <article><h3><code class="path" data-source="packages/core/src/transport/openai.ts">packages/core/src/transport/openai.ts</code></h3><p>Fetches the secret, obtains microphone media, negotiates a peer connection, sends SDP to OpenAI, normalizes provider events, and tears down tracks and channels.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/state/state-machine.ts">packages/core/src/state/state-machine.ts</code></h3><p>Maps realtime events to <code>idle</code>, <code>listening</code>, <code>thinking</code>, <code>speaking</code>, <code>interrupted</code>, and <code>error</code>.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/audio/media-stream-analyser.ts">packages/core/src/audio/media-stream-analyser.ts</code></h3><p>Connects the remote stream to Web Audio. Its analyser produces byte frequency and waveform buffers for the feature extractor.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/audio/speech-features.ts">packages/core/src/audio/speech-features.ts</code></h3><p>Turns the raw buffers into <code>VoiceFeatures</code>. The values are level, onset, silence duration, spectral centroid, voiced confidence, frequency bytes, and waveform bytes.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/render/canvas-renderer.ts">packages/core/src/render/canvas-renderer.ts</code></h3><p>Owns <code>requestAnimationFrame</code>, resize handling, a capped device pixel ratio, a capped frame delta, canvas clearing, visual clipping, and ordered preset painting.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/render/registry.ts">packages/core/src/render/registry.ts</code></h3><p>Maps preset names to painters. The five shipped layers are <code>bars</code>, <code>waveform</code>, <code>ring</code>, <code>particles</code>, and <code>hud</code>.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/text/audio-text-sync.ts">packages/core/src/text/audio-text-sync.ts</code></h3><p>Queues audio-synchronized provider transcript chunks and releases stable words or CJK graphemes only as audible time earns character credit.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/text/streaming-panel.ts">packages/core/src/text/streaming-panel.ts</code></h3><p>Builds and paints the on-canvas Pretext text panel. The panel preserves timed chunks so text motion can react to arrival time and audio features.</p></article>
+            <article><h3><code class="path" data-source="packages/core/src/transcript/store.ts">packages/core/src/transcript/store.ts</code></h3><p>Keeps an in-memory snapshot of user and agent messages. Consumer adapters read this store for an accessible transcript outside the canvas.</p></article>
+            <article><h3><code class="path" data-source="server/src/providers/openai-session.ts">server/src/providers/openai-session.ts</code></h3><p>Builds the provider session policy. It selects the model, semantic VAD behavior, response reasoning effort, output voice, speech speed, and Chinese input transcription.</p></article>
+          </div>
+        </section>
+
+        <section id="conversation" aria-labelledby="conversation-title">
+          <p class="label">ConversationSequence timing</p>
+          <h2 id="conversation-title">A conversation crosses the BFF once, then stays peer to peer.</h2>
+          <p class="section-intro">The session request is an HTTP boundary. The live conversation is a WebRTC boundary. Orange regions show variable time that belongs to the network, provider, or browser. Fixed values below are local constants in the repository.</p>
+          <div class="diagram" role="group" aria-labelledby="timing-title timing-desc">
+            <svg viewBox="0 0 1120 560" role="img" aria-labelledby="timing-title timing-desc">
+              <title id="timing-title">Live conversation timing diagram</title>
+              <desc id="timing-desc">A browser posts session preferences to the Bun BFF, receives an ephemeral secret, then establishes a WebRTC call with OpenAI. A user speaks. Provider events update the state. Remote audio creates VoiceFeatures and paced transcript text. Variable periods are clearly marked.</desc>
+              <defs><marker id="timeArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#5be5d0"/></marker><marker id="timeVariable" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5bd6b"/></marker></defs>
+              <g font-family="ui-monospace, monospace" font-size="13" fill="#e7f4f0"><text x="130" y="30">browser</text><text x="460" y="30">Bun BFF</text><text x="780" y="30">OpenAI Realtime</text><text x="1000" y="30">audio renderer</text></g>
+              <g stroke="#41615c" stroke-width="1" stroke-dasharray="4 6"><path d="M170 48V530"/><path d="M500 48V530"/><path d="M820 48V530"/><path d="M1030 48V530"/></g>
+              <g font-family="ui-monospace, monospace" font-size="11"><text x="16" y="89" fill="#9eb9b5">1</text><text x="16" y="144" fill="#9eb9b5">2</text><text x="16" y="205" fill="#9eb9b5">3</text><text x="16" y="276" fill="#9eb9b5">4</text><text x="16" y="354" fill="#9eb9b5">5</text><text x="16" y="437" fill="#9eb9b5">6</text><text x="16" y="510" fill="#9eb9b5">7</text></g>
+              <path d="M170 84H500" stroke="#5be5d0" stroke-width="2" marker-end="url(#timeArrow)"/><text x="255" y="76" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">POST /session preferences</text>
+              <path d="M500 122H170" stroke="#5be5d0" stroke-width="2" marker-end="url(#timeArrow)"/><text x="265" y="116" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">ephemeral client secret</text>
+              <path d="M170 183H820" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#timeVariable)"/><text x="380" y="173" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">WebRTC offer and SDP call setup</text>
+              <path d="M820 220H170" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#timeVariable)"/><text x="380" y="212" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">SDP answer and connection readiness</text>
+              <rect x="209" y="245" width="570" height="48" rx="4" fill="#19322e" stroke="#5be5d0"/><text x="226" y="274" font-family="ui-sans-serif, system-ui" font-size="13" fill="#e7f4f0">user speaks into microphone</text><text x="586" y="274" font-family="ui-monospace, monospace" font-size="11" fill="#9eb9b5">provider timing varies</text>
+              <path d="M820 330H170" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#timeVariable)"/><text x="314" y="320" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">speech started, stopped, transcription, response events</text>
+              <path d="M820 405H1030" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#timeVariable)"/><text x="854" y="395" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">remote audio track</text>
+              <path d="M1030 451H170" stroke="#5be5d0" stroke-width="2" marker-end="url(#timeArrow)"/><text x="462" y="442" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">VoiceFeatures drive canvas and pace transcript</text>
+              <rect x="207" y="480" width="620" height="37" rx="4" fill="#1d2927" stroke="#63827d"/><text x="224" y="503" font-family="ui-monospace, monospace" font-size="11" fill="#e7f4f0">local timeout only: connection fails after 20,000 ms if readiness never arrives</text>
+            </svg>
+          </div>
+          <p class="diagram-note">The 20 second timer limits local connection setup. It is not a performance promise. The provider round trips and remote playout above are variable by design.</p>
+          <div class="sequence" aria-label="Detailed conversation sequence">
+            <article><time>01 · request</time><div><strong>The browser posts preferences.</strong><br><code class="path" data-source="packages/core/src/transport/openai.ts">packages/core/src/transport/openai.ts</code> sends <code>responseTiming</code> and <code>speechRate</code> to the configured endpoint.</div><div class="timing">Network timing is variable.</div></article>
+            <article><time>02 · mint</time><div><strong>The BFF validates and mints.</strong><br><code class="path" data-source="server/src/routes/session.ts">server/src/routes/session.ts</code> allows only configured origins, checks rate and session budgets, then calls the provider endpoint with the protected key.</div><div class="timing">Network and provider timing are variable.</div></article>
+            <article><time>03 · connect</time><div><strong>The browser negotiates media.</strong><br>The transport captures microphone audio, opens <code>oai-events</code>, posts the SDP offer with the ephemeral secret, and accepts the SDP answer.</div><div class="timing">20,000 ms local connection timeout.</div></article>
+            <article><time>04 · listen</time><div><strong>Provider events set state.</strong><br>Speech start becomes <code>listening</code>. Speech stop becomes <code>thinking</code>. User transcription enters the transcript store when available.</div><div class="timing">Provider turn detection and transcription timing are variable.</div></article>
+            <article><time>05 · answer</time><div><strong>Remote audio starts the visual path.</strong><br>The incoming track creates an audio element and a <code>MediaStreamAnalyser</code>. Audio transcript deltas queue until detected speech earns text credit.</div><div class="timing">Provider generation and playout timing are variable.</div></article>
+            <article><time>06 · finish</time><div><strong>Silence closes the text queue.</strong><br>After an audio-synchronized response ends, the synchronizer holds for silence before it flushes remaining text and the state returns to <code>idle</code>.</div><div class="timing">850 ms local silence tail hold.</div></article>
+          </div>
+        </section>
+
+        <section id="states" aria-labelledby="states-title">
+          <p class="label">State machine</p>
+          <h2 id="states-title">State follows events, not audio level.</h2>
+          <p class="section-intro"><code class="path" data-source="packages/core/src/state/state-machine.ts">packages/core/src/state/state-machine.ts</code> keeps the semantic session state small. The renderer receives that state with the audio features, but no canvas preset decides session state from a visual threshold.</p>
+          <div class="state-flow" aria-label="Primary state sequence"><span class="state">idle</span><span class="arrow">→ connect or connected →</span><span class="state">idle</span><span class="arrow">→ user-speech-started →</span><span class="state">listening</span><span class="arrow">→ user-speech-stopped →</span><span class="state">thinking</span><span class="arrow">→ agent-audio-started →</span><span class="state">speaking</span><span class="arrow">→ response-done →</span><span class="state">idle</span></div>
+          <div class="grid two" style="margin-top:22px"><article class="card"><h3>Interruption</h3><p>If a user starts speaking while the state is <code>speaking</code>, the machine enters <code>interrupted</code>. <code class="path" data-source="packages/core/src/voice-viz.ts">packages/core/src/voice-viz.ts</code> interrupts queued text and marks the agent transcript message interrupted.</p></article><article class="card"><h3>Failure and disconnect</h3><p>A normalized error enters <code>error</code>. A disconnect resets the machine to <code>idle</code>, detaches local browser media resources, and clears active audio text synchronization.</p></article></div>
+        </section>
+
+        <section id="visualization" aria-labelledby="visualization-title">
+          <p class="label">FramePipeline requestAnimationFrame</p>
+          <h2 id="visualization-title">Every frame samples sound before it paints a layer.</h2>
+          <p class="section-intro">The renderer does not receive raw provider events. Each animation frame receives a compact <code>VizFrame</code> with state, state age, <code>VoiceFeatures</code>, regions, theme, reduced-motion status, and a capped delta time.</p>
+          <div class="pipeline">
+            <article><h3>Measure the mount</h3><p><code class="path" data-source="packages/core/src/render/canvas-renderer.ts">CanvasRenderer</code> uses <code>ResizeObserver</code>. The canvas uses a device pixel ratio capped at <code>2</code> to avoid runaway backing-store size.</p></article>
+            <article><h3>Choose the source</h3><p><code class="path" data-source="packages/core/src/voice-viz.ts">VoiceViz</code> samples the remote <code>MediaStreamAnalyser</code>, a supplied feature source, or the idle source in that order.</p></article>
+            <article><h3>Extract VoiceFeatures</h3><p>The analyser uses FFT size <code>2048</code> and smoothing <code>0.78</code>. The extractor computes smoothed level, onset, silence milliseconds, centroid, voiced confidence, and preserves the byte buffers for painters.</p></article>
+            <article><h3>Lay out regions</h3><p><code class="path" data-source="packages/core/src/layout/regions.ts">computeRegions</code> places the panel at the side only when auto placement sees width at least <code>640</code> and a wide enough host. Otherwise it puts the panel at the bottom.</p></article>
+            <article><h3>Paint in layer order</h3><p>The registry creates named presets. The renderer sorts them by <code>layer</code>, clips them to the visualization region, paints them, and then paints the text panel.</p></article>
+          </div>
+          <h3 style="margin-top:34px">Preset layers</h3>
+          <table aria-label="Visualization preset layers"><thead><tr><th>Layer</th><th>Preset</th><th>Reads</th><th>Behavior</th></tr></thead><tbody><tr><td>10</td><td><code>bars</code></td><td>Frequency bins and state</td><td>Aggregates bins into a color-scaled bar field. Speaking raises alpha.</td></tr><tr><td>20</td><td><code>waveform</code></td><td>Waveform bytes and level</td><td>Draws the time-domain line through the visualization region.</td></tr><tr><td>30</td><td><code>ring</code></td><td>Frequency bins, level, onset, voiced state</td><td>Expands a central ring with level and spectral energy.</td></tr><tr><td>40</td><td><code>particles</code></td><td>Onset, level, centroid, delta time</td><td>Spawns particles above onset <code>0.08</code>. Reduced motion stops new spawns.</td></tr><tr><td>50</td><td><code>hud</code></td><td>State, state age, level, reduced-motion status</td><td>Draws rings, ticks, scan line, and state label. Reduced motion freezes moving detail.</td></tr></tbody></table>
+          <p class="warning" style="margin-top:20px"><strong>Frame safety.</strong> <code>CanvasRenderer</code> caps its delta at <code>100 ms</code>. That prevents a long tab pause from producing one huge particle update or animation jump.</p>
+        </section>
+
+        <section id="text" aria-labelledby="text-title">
+          <p class="label">Audio-paced transcript</p>
+          <h2 id="text-title">Text waits for audible speech.</h2>
+          <p class="section-intro">Provider transcript deltas and remote playout do not share a timestamp. <code>AudioTextSynchronizer</code> therefore treats detected remote speech as the local clock. It gives text a small initial credit, then adds credit in proportion to audible time.</p>
+          <div class="grid three">
+            <article class="card"><p class="number">PACE</p><h3>18 characters per second</h3><p>The base pace is <code>18 chars/s</code>. The application can multiply that pace through <code>setTranscriptPace</code>.</p></article>
+            <article class="card"><p class="number">TAIL</p><h3>850 ms silence hold</h3><p>Once source text is done and audio falls silent, the queue waits <code>850 ms</code> before it flushes any remainder.</p></article>
+            <article class="card"><p class="number">FALLBACK</p><h3>5 second startup timeout</h3><p>If text completes but audible audio never starts, the queue flushes after <code>5,000 ms</code>.</p></article>
+          </div>
+          <div class="grid two" style="margin-top:18px"><article class="card"><h3>Stable chunks</h3><p>English-like text releases complete whitespace-terminated words. CJK text releases graphemes as they arrive. The panel batches CJK layout at four graphemes to avoid relayout for every character.</p></article><article class="card"><h3>Credit cap</h3><p>Each tick adds only a delta capped at <code>250 ms</code>. Credit also has a bounded ceiling. A stalled animation frame cannot make the transcript jump far ahead.</p></article></div>
+          <p style="margin-top:18px">The text panel is visual. <code class="path" data-source="packages/react/src/transcript-view.tsx">packages/react/src/transcript-view.tsx</code> offers the accessible React transcript view from the same store.</p>
+        </section>
+
+        <section id="simulation" aria-labelledby="simulation-title">
+          <p class="label">Demo transport</p>
+          <h2 id="simulation-title">Simulation uses the same events with fixed delays.</h2>
+          <p class="section-intro"><code class="path" data-source="apps/demo/src/demo-transport.ts">apps/demo/src/demo-transport.ts</code> implements the same transport shape as the live client. It makes the demo useful without credentials, but it does not model network or provider latency.</p>
+          <div class="grid two"><article class="card"><h3>Turn schedule</h3><p>The first synthetic user turn begins after <code>180 ms</code>. Synthetic speech lasts <code>650 ms</code>. The agent starts streaming after a further <code>460 ms</code>. Word chunks arrive every <code>135 ms</code>, and the next turn starts after <code>1,600 ms</code>.</p></article><article class="card"><h3>Synthetic signal</h3><p><code>DemoVoiceFeatureSource</code> writes deterministic-shaped frequency and waveform arrays. It reports a low idle signal. During agent speech, it varies level, onset, centroid, and waveform phase so the same canvas path remains active.</p></article></div>
+        </section>
+
+        <section id="gotchas" aria-labelledby="gotchas-title">
+          <p class="label">Operational notes</p>
+          <h2 id="gotchas-title">A few boundaries are easy to miss.</h2>
+          <div class="grid two"><article class="card"><h3>The BFF has no application authentication</h3><p>Origin checks and in-memory budgets constrain the demo service. They do not identify users. Production deployments need application authentication and durable, shared limits if multiple instances run.</p></article><article class="card"><h3>The BFF keeps no conversation data</h3><p>The server retains only in-memory origin rate-limit and session-budget counters. The transcript store lives in the browser process for the mounted visualization.</p></article><article class="card"><h3>Remote audio is deliberately attached</h3><p><code class="path" data-source="packages/core/src/voice-viz.ts">VoiceViz</code> creates a muted autoplay audio element for the remote stream and also connects the analyser to the audio context destination. The analyser has a <code>monitor</code> option for direct use.</p></article><article class="card"><h3>Check the environment variable name</h3><p><code class="path" data-source="server/src/config.ts">server/src/config.ts</code> reads <code>PORT</code> and defaults to <code>3010</code>. <code class="path" data-source="server/.env.example">server/.env.example</code> still lists <code>SERVER_PORT</code>. That variable is ignored by the current config.</p></article><article class="card"><h3>Provider policy is server-owned</h3><p><code class="path" data-source="server/src/providers/openai-session.ts">openai-session.ts</code> sets output voice <code>echo</code> and input transcription language <code>zh</code>. The browser sends response timing and speech rate, but it never receives the standard API key.</p></article><article class="card"><h3>Custom elements isolate their own CSS</h3><p><code class="path" data-source="packages/wc/src/voice-viz-element.ts">VoiceVizElement</code> mounts inside an open Shadow DOM root. The internal canvas and styles do not inherit a host page's global canvas styling.</p></article></div>
+        </section>
+      </main>
+    </div>
+    <footer>Source-backed architecture reference. Run <code>node scripts/check-architecture-doc.mjs</code> after changing this page.</footer>
+  </div>
+  <script>
+    const links = [...document.querySelectorAll('nav a')];
+    const sections = links.map((link) => document.querySelector(link.hash)).filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      for (const link of links) link.removeAttribute('aria-current');
+      document.querySelector(`nav a[href="#${visible.target.id}"]`)?.setAttribute('aria-current', 'true');
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0, .2, .6] });
+    sections.forEach((section) => observer.observe(section));
+  </script>
+</body>
+</html>

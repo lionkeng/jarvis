@@ -36,7 +36,7 @@ export function App() {
   const [textMotion, setTextMotion] = useState<TextMotion>("flow");
   const [placement, setPlacement] = useState<PanelPlacement>("auto");
   const [presets, setPresets] = useState<PresetName[]>(PRESETS);
-  const [endpoint, setEndpoint] = useState("http://localhost:3001/session");
+  const [endpoint, setEndpoint] = useState("http://localhost:3010/session");
   const [responseTiming, setResponseTiming] = useState<ResponseTiming>("natural");
   const [speechRate, setSpeechRate] = useState(1);
   const [messages, setMessages] = useState<readonly TranscriptMessage[]>([]);
