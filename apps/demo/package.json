@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite",
+    "dev": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite --port 5180",
     "typecheck": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "build": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite build"

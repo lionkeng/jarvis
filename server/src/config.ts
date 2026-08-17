@@ -22,7 +22,7 @@ function positiveInteger(name: string, value: string | undefined, fallback: numb
 }
 
 function allowedOrigins(value: string | undefined): string[] {
-  const configured = (value ?? "http://localhost:5173").split(",").map((origin) => origin.trim()).filter(Boolean);
+  const configured = (value ?? "http://localhost:5180").split(",").map((origin) => origin.trim()).filter(Boolean);
   if (configured.length === 0) throw new Error("ALLOWED_ORIGINS must contain at least one origin");
   return configured.map((origin) => {
     const url = new URL(origin);
@@ -38,7 +38,7 @@ export function readConfig(env: Record<string, string | undefined> = Bun.env): S
     apiKey,
     model: env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini",
     allowedOrigins: allowedOrigins(env.ALLOWED_ORIGINS),
-    port: positiveInteger("PORT", env.PORT, 3001, 65_535),
+    port: positiveInteger("PORT", env.PORT, 3010, 65_535),
     rateLimitRequests: positiveInteger("RATE_LIMIT_REQUESTS", env.RATE_LIMIT_REQUESTS, 8),
     rateLimitWindowMs: positiveInteger("RATE_LIMIT_WINDOW_MS", env.RATE_LIMIT_WINDOW_MS, 60_000),
     sessionBudgetRequests: positiveInteger("SESSION_BUDGET_REQUESTS", env.SESSION_BUDGET_REQUESTS, 30),
