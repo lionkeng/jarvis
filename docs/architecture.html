@@ -113,7 +113,7 @@
         <section id="system" aria-labelledby="system-title">
           <p class="label">ArchitectureMap boundaries</p>
           <h2 id="system-title">The API key stops at the BFF.</h2>
-          <p class="section-intro">The public packages own browser behavior. The server owns the long-lived OpenAI API key and turns it into an ephemeral client secret. After that handoff, the browser exchanges SDP, microphone audio, remote audio, and realtime events directly with OpenAI.</p>
+          <p class="section-intro">The public packages own browser behavior. The server is a Backend for Frontend (BFF): a small backend written for this browser client, not a general-purpose API. It owns the long-lived OpenAI API key and turns it into an ephemeral client secret. After that handoff, the browser exchanges SDP, microphone audio, remote audio, and realtime events directly with OpenAI. Microsoft documents the <a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends" rel="noopener noreferrer" target="_blank">Backends for Frontends pattern</a> in more detail.</p>
           <div class="diagram" role="group" aria-labelledby="graph-title graph-desc">
             <svg viewBox="0 0 1060 470" role="img" aria-labelledby="graph-title graph-desc">
               <title id="graph-title">Jarvis component graph</title>

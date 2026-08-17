@@ -27,9 +27,13 @@ for (const anchor of document.querySelectorAll('nav a[href^="#"]')) {
   expect(Boolean(document.getElementById(id)), `nav anchor points to missing #${id}`);
 }
 
+const allowedExternalHrefs = new Set([
+  "https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends",
+]);
+
 for (const element of document.querySelectorAll("[src], link[href], a[href]")) {
   const value = element.getAttribute(element.hasAttribute("src") ? "src" : "href") ?? "";
-  if (element.tagName === "A" && value.startsWith("#")) continue;
+  if (element.tagName === "A" && (value.startsWith("#") || allowedExternalHrefs.has(value))) continue;
   expect(!/^(?:https?:)?\/\//i.test(value), `external asset or link URL: ${value}`);
 }
 
