@@ -34,13 +34,15 @@ OR, to run both demo and the server,
 pnpm dev:all
 ```
 
-Open the demo, select **OpenAI live**, and connect the primary host to `http://localhost:3010/session`.
+Open `http://localhost:5180/`. Select **OpenAI live**, and connect the primary host to `http://localhost:3010/session`. Vite fails if port 5180 is already taken so the page origin stays on the allowlist.
 
 ## Voice-first demo
 
 Open `/voice.html#/dashboard`. Simulation mode needs no credentials. Live mode uses the same Bun session endpoint as the visualization lab.
 
 Spoken UI requests become one `perform_ui_actions` call. `VoiceViz` emits a `toolcall` event. A demo-only XState actor validates the call, runs a registered capability, and returns one result through `submitToolResult`. Ordinary questions stay in conversation and do not change the page.
+
+Live evaluation lives at `http://localhost:5180/voice.html?mode=live`. The repeatable corpus and scoring rules are in `docs/realtime-reliability-eval.md`. Tracing is on by default. Set `OPENAI_REALTIME_TRACING=false` in `server/.env` and restart the BFF before creating a new session if you need it off. The setting cannot change on an already-running session.
 
 Supported commands are navigation, library selection, the details drawer, named-region scrolling, dashboard search focus, article bookmark activation, and theme selection. The model cannot choose CSS selectors, pointer coordinates, JavaScript, or URLs. XState is a demo dependency. It is not part of `@jarvis-viz/core`.
 

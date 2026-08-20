@@ -8,4 +8,4 @@ export { themes } from "./render/theme.js";
 export type { TextMotion, Theme, ThemeInput, ThemeName } from "./render/theme.js";
 export { TranscriptStore } from "./transcript/store.js";
 export type { TranscriptMessage, TranscriptRole, TranscriptSnapshot, TranscriptStatus } from "./transcript/types.js";
-export type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport, ResponseTiming } from "./transport/types.js";
+export type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolFollowUpIntent, RealtimeToolResult, RealtimeTransport, ResponseTiming } from "./transport/types.js";

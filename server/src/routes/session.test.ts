@@ -5,7 +5,7 @@ import type { ServerConfig } from "../config.js";
 const config: ServerConfig = {
   apiKey: "test-key", model: "gpt-realtime-2.1-mini", allowedOrigins: ["https://voice.example"], port: 3010,
   rateLimitRequests: 1, rateLimitWindowMs: 60_000, sessionBudgetRequests: 10, sessionBudgetWindowMs: 3_600_000,
-  maxOutputTokens: 512, contextTokenLimit: 4000,
+  maxOutputTokens: 512, contextTokenLimit: 4000, realtimeTracing: true,
 };
 const fetcher = async () => Response.json({ value: "ek_test", expires_at: Math.floor(Date.now() / 1000) + 60 });
 
@@ -17,6 +17,16 @@ describe("session route", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("access-control-allow-origin")).toBe("https://voice.example");
     expect((await response.json() as { value: string }).value).toBe("ek_test");
+  });
+
+  test("mints for other loopback origins when localhost is configured", async () => {
+    const route = createSessionRoute({
+      config: { ...config, allowedOrigins: ["http://localhost:5180"] },
+      fetcher,
+    });
+    const response = await route(new Request("http://localhost/session", { method: "POST", headers: { Origin: "http://[::1]:5180" } }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://[::1]:5180");
   });
 
   test("forwards validated live-session preferences to OpenAI", async () => {
@@ -53,6 +63,28 @@ describe("session route", () => {
     });
   });
 
+  test("forwards server-owned realtime tracing into the provider session body", async () => {
+    const capture = async (realtimeTracing: boolean) => {
+      let providerBody: Record<string, unknown> | undefined;
+      const route = createSessionRoute({
+        config: { ...config, realtimeTracing },
+        fetcher: async (_input, init) => {
+          providerBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Response.json({ value: "ek_tracing", expires_at: Math.floor(Date.now() / 1000) + 60 });
+        },
+      });
+      const response = await route(new Request("http://localhost/session", {
+        method: "POST",
+        headers: { Origin: "https://voice.example" },
+      }));
+      expect(response.status).toBe(200);
+      return (providerBody as { session: { tracing: unknown } }).session.tracing;
+    };
+
+    expect(await capture(true)).toBe("auto");
+    expect(await capture(false)).toBeNull();
+  });
+
   test("rejects malformed or out-of-policy session preferences", async () => {
     let called = false;
     const route = createSessionRoute({ config, fetcher: async () => { called = true; return Response.json({ value: "bad" }); } });
@@ -71,7 +103,16 @@ describe("session route", () => {
     const route = createSessionRoute({ config, fetcher: async () => { called = true; return Response.json({ value: "bad" }); } });
     const response = await route(new Request("http://localhost/session", { method: "POST", headers: { Origin: "https://attacker.example" } }));
     expect(response.status).toBe(403);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://attacker.example");
+    expect(await response.json()).toEqual({ error: "Origin is not allowed" });
     expect(called).toBe(false);
+  });
+
+  test("answers OPTIONS preflight for a disallowed origin so the browser can read the POST error", async () => {
+    const route = createSessionRoute({ config, fetcher });
+    const response = await route(new Request("http://localhost/session", { method: "OPTIONS", headers: { Origin: "https://attacker.example" } }));
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://attacker.example");
   });
 
   test("rate limits per origin and ignores spoofable forwarded-address headers", async () => {

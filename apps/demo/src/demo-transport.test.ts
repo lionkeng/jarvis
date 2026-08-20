@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RealtimeToolResult } from "@jarvis-viz/core";
 import { DemoTransport, DemoVoiceFeatureSource } from "./demo-transport.js";
 
 describe("DemoVoiceFeatureSource", () => {
@@ -22,7 +23,7 @@ describe("DemoVoiceFeatureSource", () => {
 describe("DemoTransport", () => {
   it("records submitted tool results without emitting provider event names", () => {
     const transport = new DemoTransport();
-    const result = { callId: "call_1", output: "{\"ok\":true}", continueResponse: true };
+    const result: RealtimeToolResult = { callId: "call_1", output: "{\"ok\":true}", followUp: "brief-acknowledgement" };
     transport.submitToolResult(result);
     expect(transport.submittedToolResults).toEqual([result]);
   });

@@ -106,7 +106,7 @@ describe("VoiceApp", () => {
     expect(host.querySelector("#article-title")).not.toBeNull();
     const article = host.querySelector("[data-voice-id='article.content']");
     expect(article).toBeInstanceOf(HTMLElement);
-    if (article instanceof HTMLElement) expect(article.scrollTop).toBe(article.scrollHeight);
+    if (article instanceof HTMLElement) expect(article.scrollTop).toBe(240);
     expect(host.querySelector('[data-testid="activity-result"]')?.textContent).not.toBe("none");
     expect(seenStates.has("validating") || seenStates.has("executing") || seenStates.has("reporting")).toBe(true);
     expect(host.querySelector('[data-testid="activity-state"]')?.textContent).toBe("ready");
@@ -151,6 +151,22 @@ describe("VoiceApp", () => {
     await act(async () => { bookmark.click(); });
     await settle();
     expect(namedButton(host, ".page", "Bookmarked")).toBeInstanceOf(HTMLButtonElement);
+    await unmountApp(root, host);
+  });
+
+  it("posts the session endpoint when Connect is clicked in live mode", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "Origin is not allowed" }), { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await settle();
+    expect(namedButton(host, ".session", "Connect")).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    expect(fetchMock).toHaveBeenCalled();
+    const sessionCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/session"));
+    expect(sessionCall?.[0]).toBe("http://localhost:3010/session");
+    expect(host.querySelector(".toolbar span")?.textContent).toMatch(/Session endpoint failed|Origin is not allowed|Failed to fetch|Connecting/);
     await unmountApp(root, host);
   });
 

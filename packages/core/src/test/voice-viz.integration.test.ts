@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceViz } from "../voice-viz.js";
 import { createIdleFeatures } from "../audio/idle-features.js";
 import type { VoiceFeatureSource } from "../audio/types.js";
-import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "../transport/types.js";
+import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolFollowUpIntent, RealtimeToolResult, RealtimeTransport } from "../transport/types.js";
 
 class FakeTransport implements RealtimeTransport {
   connected = false;
@@ -127,10 +127,26 @@ describe("VoiceViz integration", () => {
     expect(viz.transcript.getSnapshot().messages).toHaveLength(0);
     transport.emit({ type: "response-done" });
     expect(viz.state).toBe("idle");
-    const result = { callId: "call_ui", output: "{\"ok\":true}" };
+    const result: RealtimeToolResult = { callId: "call_ui", output: "{\"ok\":true}", followUp: "default" };
     viz.submitToolResult(result);
     expect(transport.submitToolResult).toHaveBeenCalledOnce();
     expect(transport.submitToolResult).toHaveBeenCalledWith(result);
+    viz.unmount();
+  });
+
+  it("forwards each follow-up intent to the transport unchanged", () => {
+    const mount = document.createElement("div");
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(mount);
+
+    const intents: RealtimeToolFollowUpIntent[] = ["default", "brief-acknowledgement", "none"];
+    for (const followUp of intents) {
+      const result: RealtimeToolResult = { callId: "call_ui", output: "{\"ok\":true}", followUp };
+      viz.submitToolResult(result);
+      expect(transport.submitToolResult).toHaveBeenLastCalledWith(result);
+    }
+    expect(transport.submitToolResult).toHaveBeenCalledTimes(intents.length);
     viz.unmount();
   });
 });
