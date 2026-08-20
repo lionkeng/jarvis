@@ -22,13 +22,12 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
   return async function sessionRoute(request: Request): Promise<Response> {
     if (request.method === "OPTIONS") {
       const origin = request.headers.get("Origin");
-      return originGuard.allows(origin)
-        ? new Response(null, { status: 204, headers: corsHeaders(origin!) })
-        : json({ error: "Origin is not allowed" }, 403);
+      if (!origin) return json({ error: "Origin is not allowed" }, 403);
+      return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, { Allow: "POST, OPTIONS" });
     const origin = request.headers.get("Origin");
-    if (!originGuard.allows(origin)) return json({ error: "Origin is not allowed" }, 403);
+    if (!originGuard.allows(origin)) return json({ error: "Origin is not allowed" }, 403, origin ? corsHeaders(origin) : {});
     if (!rateLimiter.take(origin!)) return json({ error: "Session request rate limit exceeded" }, 429, { "Retry-After": retryAfter(config.rateLimitWindowMs), ...corsHeaders(origin!) });
     let preferences: SessionPreferences;
     try {
