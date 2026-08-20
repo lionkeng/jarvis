@@ -3,6 +3,9 @@ import type { RealtimeToolCall } from "@jarvis-viz/core";
 import {
   PERFORM_UI_ACTIONS_TOOL,
   parseToolCall,
+  serializeBatchResult,
+  successResult,
+  toWireAction,
   type UiCommand,
 } from "./interaction-contract.js";
 
@@ -162,6 +165,27 @@ describe("parseToolCall", () => {
       ok: false,
       result: { code: "invalid_arguments", applied: [] },
     });
+  });
+
+  it("round-trips accepted commands through the wire shape", () => {
+    for (const { raw, command } of ALLOWED) {
+      expect(toWireAction(command)).toEqual(raw);
+      expect(parseToolCall(call([toWireAction(command)]))).toEqual({ ok: true, commands: [command] });
+    }
+  });
+
+  it("serializes reported results with wire targets and a result-first success line", () => {
+    expect(successResult([{ type: "navigate", route: "library" }]).message).toBe("Opened the library.");
+    expect(successResult([
+      { type: "navigate", route: "article" },
+      { type: "scroll", target: "article.content", direction: "down" },
+    ]).message).toBe("Opened the article and scrolled down.");
+    const serialized = JSON.parse(serializeBatchResult(successResult([{ type: "navigate", route: "library" }]))) as {
+      applied: unknown;
+      message: string;
+    };
+    expect(serialized.applied).toEqual([{ type: "navigate", target: "library" }]);
+    expect(serialized.message).not.toMatch(/action/i);
   });
 
   it("points at the first invalid action in a mixed batch", () => {

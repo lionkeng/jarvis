@@ -106,7 +106,7 @@ describe("VoiceApp", () => {
     expect(host.querySelector("#article-title")).not.toBeNull();
     const article = host.querySelector("[data-voice-id='article.content']");
     expect(article).toBeInstanceOf(HTMLElement);
-    if (article instanceof HTMLElement) expect(article.scrollTop).toBe(article.scrollHeight);
+    if (article instanceof HTMLElement) expect(article.scrollTop).toBe(240);
     expect(host.querySelector('[data-testid="activity-result"]')?.textContent).not.toBe("none");
     expect(seenStates.has("validating") || seenStates.has("executing") || seenStates.has("reporting")).toBe(true);
     expect(host.querySelector('[data-testid="activity-state"]')?.textContent).toBe("ready");

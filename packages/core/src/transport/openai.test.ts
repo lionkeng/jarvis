@@ -132,30 +132,88 @@ describe("OpenAI event normalization", () => {
     expect(localTrack.stop).toHaveBeenCalledOnce();
   });
 
-  it("sends function output then response.create, and can suppress the follow-up", async () => {
+  it("sends function output then a constrained success acknowledgement", async () => {
     const harness = stubOpenChannel();
     const transport = new OpenAIRealtimeTransport();
     await harness.connect(transport);
 
-    transport.submitToolResult({ callId: "call_9", output: "{\"ok\":true}" });
-    expect(harness.channel.send).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(String(harness.channel.send.mock.calls[0]?.[0]))).toEqual({
-      type: "conversation.item.create",
-      item: { type: "function_call_output", call_id: "call_9", output: "{\"ok\":true}" },
+    transport.submitToolResult({
+      callId: "call_ok",
+      output: "{\"ok\":true,\"message\":\"Opened library.\"}",
+      followUp: "brief-acknowledgement",
     });
-    expect(JSON.parse(String(harness.channel.send.mock.calls[1]?.[0]))).toEqual({ type: "response.create" });
 
-    harness.channel.send.mockClear();
-    transport.submitToolResult({ callId: "call_9", output: "{\"ok\":false,\"code\":\"cancelled\"}", continueResponse: false });
-    expect(harness.channel.send).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(harness.channel.send.mock.calls[0]?.[0]))).toEqual({
+    const sent = parseSent(harness);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toEqual({
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
-        call_id: "call_9",
-        output: "{\"ok\":false,\"code\":\"cancelled\"}",
+        call_id: "call_ok",
+        output: "{\"ok\":true,\"message\":\"Opened library.\"}",
       },
     });
+    expect(sent[1]).toEqual({
+      type: "response.create",
+      response: {
+        tools: [],
+        tool_choice: "none",
+        max_output_tokens: 64,
+        instructions: expect.stringMatching(
+          /result first[\s\S]*one short sentence[\s\S]*internal action names[\s\S]*target IDs[\s\S]*JSON[\s\S]*action counts[\s\S]*do not call any tools/i,
+        ),
+      },
+    });
+    expect(sent[1]).not.toHaveProperty("response.voice");
+    expect(sent[1]).not.toHaveProperty("response.output_modalities");
+    expect(JSON.stringify(sent[1])).not.toContain("perform_ui_actions");
+    transport.disconnect();
+  });
+
+  it("sends function output then a bare default failure response", async () => {
+    const harness = stubOpenChannel();
+    const transport = new OpenAIRealtimeTransport();
+    await harness.connect(transport);
+
+    transport.submitToolResult({
+      callId: "call_fail",
+      output: "{\"ok\":false,\"code\":\"unknown_capability\"}",
+      followUp: "default",
+    });
+
+    expect(parseSent(harness)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_fail",
+          output: "{\"ok\":false,\"code\":\"unknown_capability\"}",
+        },
+      },
+      { type: "response.create" },
+    ]);
+    transport.disconnect();
+  });
+
+  it("sends function output with no follow-up response for none", async () => {
+    const harness = stubOpenChannel();
+    const transport = new OpenAIRealtimeTransport();
+    await harness.connect(transport);
+
+    transport.submitToolResult({
+      callId: "call_cancel",
+      output: "{\"ok\":false,\"code\":\"cancelled\"}",
+      followUp: "none",
+    });
+
+    expect(parseSent(harness)).toEqual([{
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "call_cancel",
+        output: "{\"ok\":false,\"code\":\"cancelled\"}",
+      },
+    }]);
     transport.disconnect();
   });
 
@@ -176,11 +234,15 @@ describe("OpenAI event normalization", () => {
     expect(events).toContainEqual({ type: "tool-call", callId: "call_live" });
 
     harness.channel.readyState = "closing";
-    expect(() => transport.submitToolResult({ callId: "call_live", output: "{}" })).toThrow("Realtime data channel is not open");
+    expect(() => transport.submitToolResult({ callId: "call_live", output: "{}", followUp: "default" })).toThrow("Realtime data channel is not open");
     transport.disconnect();
-    expect(() => transport.submitToolResult({ callId: "call_live", output: "{}" })).toThrow("Realtime data channel is not open");
+    expect(() => transport.submitToolResult({ callId: "call_live", output: "{}", followUp: "default" })).toThrow("Realtime data channel is not open");
   });
 });
+
+function parseSent(harness: { channel: { send: { mock: { calls: unknown[][] } } } }): unknown[] {
+  return harness.channel.send.mock.calls.map((call) => JSON.parse(String(call[0])));
+}
 
 function stubOpenChannel() {
   const channelListeners = new Map<string, (event?: { data?: string }) => void>();

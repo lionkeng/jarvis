@@ -16,10 +16,18 @@ export interface RealtimeToolCall {
   argumentsJson: string;
 }
 
+/**
+ * Semantic follow-up after a tool result.
+ * `default` requests a normal explanatory follow-up.
+ * `brief-acknowledgement` requests a short success acknowledgement.
+ * `none` submits the output and does not request a follow-up.
+ */
+export type RealtimeToolFollowUpIntent = "default" | "brief-acknowledgement" | "none";
+
 export interface RealtimeToolResult {
   callId: string;
   output: string;
-  continueResponse?: boolean;
+  followUp: RealtimeToolFollowUpIntent;
 }
 
 export type NormalizedRealtimeEvent =
