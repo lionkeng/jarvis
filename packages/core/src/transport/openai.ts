@@ -1,6 +1,35 @@
-import type { EphemeralSession, NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolResult, RealtimeTransport } from "./types.js";
+import type { EphemeralSession, NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolFollowUpIntent, RealtimeToolResult, RealtimeTransport } from "./types.js";
 
 type ProviderEvent = Record<string, unknown> & { type?: string };
+
+const BRIEF_ACKNOWLEDGEMENT_INSTRUCTIONS = [
+  "Speak the successful result first in one short sentence.",
+  "Do not mention internal action names, target IDs, JSON, or action counts.",
+  "Do not call any tools.",
+].join(" ");
+
+function followUpCreateEvent(intent: RealtimeToolFollowUpIntent): ProviderEvent | undefined {
+  switch (intent) {
+    case "none":
+      return undefined;
+    case "default":
+      return { type: "response.create" };
+    case "brief-acknowledgement":
+      return {
+        type: "response.create",
+        response: {
+          tools: [],
+          tool_choice: "none",
+          max_output_tokens: 64,
+          instructions: BRIEF_ACKNOWLEDGEMENT_INSTRUCTIONS,
+        },
+      };
+    default: {
+      const _exhaustive: never = intent;
+      return _exhaustive;
+    }
+  }
+}
 
 function stringField(event: ProviderEvent, key: string): string | undefined {
   const value = event[key];
@@ -225,9 +254,8 @@ export class OpenAIRealtimeTransport implements RealtimeTransport {
         output: result.output,
       },
     }));
-    if (result.continueResponse !== false) {
-      channel.send(JSON.stringify({ type: "response.create" }));
-    }
+    const followUp = followUpCreateEvent(result.followUp);
+    if (followUp) channel.send(JSON.stringify(followUp));
   }
 
   disconnect(): void {
