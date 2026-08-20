@@ -42,6 +42,8 @@ Open `/voice.html#/dashboard`. Simulation mode needs no credentials. Live mode u
 
 Spoken UI requests become one `perform_ui_actions` call. `VoiceViz` emits a `toolcall` event. A demo-only XState actor validates the call, runs a registered capability, and returns one result through `submitToolResult`. Ordinary questions stay in conversation and do not change the page.
 
+Live evaluation lives at `http://localhost:5180/voice.html?mode=live`. The repeatable corpus and scoring rules are in `docs/realtime-reliability-eval.md`. Tracing is on by default. Set `OPENAI_REALTIME_TRACING=false` in `server/.env` and restart the BFF before creating a new session if you need it off. The setting cannot change on an already-running session.
+
 Supported commands are navigation, library selection, the details drawer, named-region scrolling, dashboard search focus, article bookmark activation, and theme selection. The model cannot choose CSS selectors, pointer coordinates, JavaScript, or URLs. XState is a demo dependency. It is not part of `@jarvis-viz/core`.
 
 ## Core usage

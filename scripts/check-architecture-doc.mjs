@@ -43,6 +43,7 @@ const facts = [
   "perform_ui_actions",
   "bars", "waveform", "ring", "particles", "hud",
   "Network timing is variable", "Provider turn detection and transcription timing are variable",
+  "OPENAI_REALTIME_TRACING", "followUp", "parallel_tool_calls", "brief-acknowledgement",
 ];
 for (const fact of facts) expect(html.includes(fact), `missing required fact: ${fact}`);
 

@@ -25,4 +25,6 @@ browser --WebRTC (audio + tool calls) --> OpenAI realtime/calls
 
 ## Security posture
 
-The BFF validates exact origins, applies a short rate window and a longer per-origin issuance budget, and fixes Realtime model, voice, output-token, and context-token limits server-side. Responses are `no-store`. The long-lived OpenAI API key exists only in the Bun process.
+The BFF validates exact origins, applies a short rate window and a longer per-origin issuance budget, and fixes Realtime model, voice, output-token, and context-token limits server-side. Tracing is on by default (`OPENAI_REALTIME_TRACING`). Responses are `no-store`. The long-lived OpenAI API key exists only in the Bun process.
+
+The session advertises an exact `perform_ui_actions` grammar. The browser parser still treats tool arguments as untrusted. After a voice result, core carries a required `followUp` intent. Success acknowledgements are tool-less and response-scoped. Cancellation stays silent.
