@@ -15,4 +15,24 @@ describe("readConfig", () => {
     expect(() => readConfig({ OPENAI_API_KEY: "key", MAX_OUTPUT_TOKENS: "4097" })).toThrow("MAX_OUTPUT_TOKENS");
     expect(() => readConfig({ OPENAI_API_KEY: "key", ALLOWED_ORIGINS: "javascript:alert(1)" })).toThrow("protocol");
   });
+
+  test("enables realtime tracing when OPENAI_REALTIME_TRACING is missing or blank", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key" }).realtimeTracing).toBe(true);
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "" }).realtimeTracing).toBe(true);
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "   " }).realtimeTracing).toBe(true);
+  });
+
+  test("parses exact true and false for OPENAI_REALTIME_TRACING after trim", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "true" }).realtimeTracing).toBe(true);
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "false" }).realtimeTracing).toBe(false);
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: " true " }).realtimeTracing).toBe(true);
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: " false " }).realtimeTracing).toBe(false);
+  });
+
+  test("rejects invalid OPENAI_REALTIME_TRACING values without coercing", () => {
+    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "TRUE" })).toThrow("OPENAI_REALTIME_TRACING");
+    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "1" })).toThrow("OPENAI_REALTIME_TRACING");
+    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "yes" })).toThrow("OPENAI_REALTIME_TRACING");
+    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "on" })).toThrow("OPENAI_REALTIME_TRACING");
+  });
 });

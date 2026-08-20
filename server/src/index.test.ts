@@ -6,7 +6,7 @@ test("built server shape responds across a real Bun HTTP listener", async () => 
   const baseConfig: ServerConfig = {
     apiKey: "test-only", model: "gpt-realtime-2.1-mini", allowedOrigins: ["http://localhost:5180"], port: 30_000,
     rateLimitRequests: 2, rateLimitWindowMs: 1000, sessionBudgetRequests: 2, sessionBudgetWindowMs: 1000,
-    maxOutputTokens: 128, contextTokenLimit: 1000,
+    maxOutputTokens: 128, contextTokenLimit: 1000, realtimeTracing: true,
   };
   let server: ReturnType<typeof createServer> | undefined;
   for (let attempt = 0; attempt < 10 && !server; attempt += 1) {
