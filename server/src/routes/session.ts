@@ -43,6 +43,7 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
         maxOutputTokens: config.maxOutputTokens,
         contextTokenLimit: config.contextTokenLimit,
         preferences,
+        realtimeTracing: config.realtimeTracing,
       }, dependencies.fetcher);
       return json(secret, 200, { "Cache-Control": "no-store", ...corsHeaders(origin!) });
     } catch (error) {

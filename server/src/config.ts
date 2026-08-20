@@ -9,6 +9,7 @@ export interface ServerConfig {
   sessionBudgetWindowMs: number;
   maxOutputTokens: number;
   contextTokenLimit: number;
+  realtimeTracing: boolean;
 }
 
 function positiveInteger(name: string, value: string | undefined, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
@@ -19,6 +20,14 @@ function positiveInteger(name: string, value: string | undefined, fallback: numb
     throw new Error(`${name} must be between 1 and ${maximum}`);
   }
   return parsed;
+}
+
+function realtimeTracing(value: string | undefined): boolean {
+  const parsed = value?.trim() ?? "";
+  if (parsed === "") return true;
+  if (parsed === "true") return true;
+  if (parsed === "false") return false;
+  throw new Error("OPENAI_REALTIME_TRACING must be true or false");
 }
 
 function allowedOrigins(value: string | undefined): string[] {
@@ -45,5 +54,6 @@ export function readConfig(env: Record<string, string | undefined> = Bun.env): S
     sessionBudgetWindowMs: positiveInteger("SESSION_BUDGET_WINDOW_MS", env.SESSION_BUDGET_WINDOW_MS, 3_600_000),
     maxOutputTokens: positiveInteger("MAX_OUTPUT_TOKENS", env.MAX_OUTPUT_TOKENS, 768, 4_096),
     contextTokenLimit: positiveInteger("CONTEXT_TOKEN_LIMIT", env.CONTEXT_TOKEN_LIMIT, 8_000),
+    realtimeTracing: realtimeTracing(env.OPENAI_REALTIME_TRACING),
   };
 }

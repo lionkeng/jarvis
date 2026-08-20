@@ -5,6 +5,7 @@ export interface OpenAISessionPolicy {
   maxOutputTokens: number;
   contextTokenLimit: number;
   preferences: SessionPreferences;
+  realtimeTracing: boolean;
 }
 
 export interface ClientSecretResponse {
@@ -27,27 +28,10 @@ const TIMING_POLICY: Record<ResponseTiming, {
 
 const TRANSCRIPTION_LANGUAGE = "zh";
 
-const UI_ACTION_TYPES = ["navigate", "open", "close", "select", "scroll", "focus", "activate"] as const;
-const UI_TARGETS = [
-  "dashboard",
-  "library",
-  "article",
-  "settings",
-  "library.details",
-  "library.item",
-  "settings.theme",
-  "article.content",
-  "library.results",
-  "dashboard.search",
-  "article.bookmark",
-] as const;
-const UI_DIRECTIONS = ["up", "down", "top", "bottom"] as const;
-const UI_VALUES = ["atlas", "beacon", "cinder", "light", "dark", "system"] as const;
-
 const PERFORM_UI_ACTIONS_TOOL = {
   type: "function",
   name: "perform_ui_actions",
-  description: "Change this demo's UI with one to five ordered semantic actions. Use only when the user asks to navigate, open or close the library details, select a library item or theme, scroll a named region, focus dashboard search, or activate the article bookmark.",
+  description: "Put every ordered action for one user request in a single call. Navigate goes to a page. Open and close only the library details panel. Select library items or themes, scroll named regions, focus dashboard search, or activate the article bookmark.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -58,15 +42,83 @@ const PERFORM_UI_ACTIONS_TOOL = {
         minItems: 1,
         maxItems: 5,
         items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["type"],
-          properties: {
-            type: { type: "string", enum: UI_ACTION_TYPES },
-            target: { type: "string", enum: UI_TARGETS },
-            direction: { type: "string", enum: UI_DIRECTIONS },
-            value: { type: "string", enum: UI_VALUES },
-          },
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target"],
+              properties: {
+                type: { type: "string", enum: ["navigate"] },
+                target: { type: "string", enum: ["dashboard", "library", "article", "settings"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target"],
+              properties: {
+                type: { type: "string", enum: ["open"] },
+                target: { type: "string", enum: ["library.details"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target"],
+              properties: {
+                type: { type: "string", enum: ["close"] },
+                target: { type: "string", enum: ["library.details"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target", "value"],
+              properties: {
+                type: { type: "string", enum: ["select"] },
+                target: { type: "string", enum: ["library.item"] },
+                value: { type: "string", enum: ["atlas", "beacon", "cinder"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target", "value"],
+              properties: {
+                type: { type: "string", enum: ["select"] },
+                target: { type: "string", enum: ["settings.theme"] },
+                value: { type: "string", enum: ["light", "dark", "system"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target", "direction"],
+              properties: {
+                type: { type: "string", enum: ["scroll"] },
+                target: { type: "string", enum: ["article.content", "library.results"] },
+                direction: { type: "string", enum: ["up", "down", "top", "bottom"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target"],
+              properties: {
+                type: { type: "string", enum: ["focus"] },
+                target: { type: "string", enum: ["dashboard.search"] },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "target"],
+              properties: {
+                type: { type: "string", enum: ["activate"] },
+                target: { type: "string", enum: ["article.bookmark"] },
+              },
+            },
+          ],
         },
       },
     },
@@ -74,10 +126,16 @@ const PERFORM_UI_ACTIONS_TOOL = {
 } as const;
 
 const SESSION_INSTRUCTIONS = [
-  "You are a concise voice assistant. Prefer short spoken answers unless the user asks for detail.",
-  "Use perform_ui_actions only for UI mutations in this demo. Answer ordinary informational questions by speaking and do not call the tool for those.",
-  "Preserve the user's requested action order. Never invent CSS selectors, pointer coordinates, JavaScript, URLs, or targets outside the tool schema.",
-].join(" ");
+  "Answer. Direct informational answers use one or two short sentences unless the user asks for detail.",
+  "Act. UI mutation requests call perform_ui_actions without a spoken preamble. Ordinary questions never call the UI tool.",
+  "Navigate. Opening dashboard, library, article, or settings means navigation. open is reserved for the library details panel.",
+  "Compound. A request containing several UI changes becomes one tool call with ordered actions.",
+  "Scroll. Unqualified scroll means one downward scroll on the named or implied page content. Explicit up, top, bottom, or down wording takes precedence.",
+  "Example. Open article and scroll means navigate to the article and then scroll article.content down in the same call.",
+  "Clarify. Ask at most one short clarification only when a required target or value truly cannot be inferred from the closed demo grammar.",
+  "Result. Do not claim success before a successful tool result. After a failure, state the result briefly and do not invent a retry.",
+  "Schema. Never invent CSS selectors, pointer coordinates, JavaScript, URLs, or targets outside the tool schema.",
+].join("\n");
 
 export async function createOpenAIClientSecret(apiKey: string, policy: OpenAISessionPolicy, fetcher: FetchLike = fetch, now: () => number = Date.now): Promise<ClientSecretResponse> {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
@@ -111,6 +169,8 @@ export async function createOpenAIClientSecret(apiKey: string, policy: OpenAISes
         },
         tools: [PERFORM_UI_ACTIONS_TOOL],
         tool_choice: "auto",
+        parallel_tool_calls: false,
+        tracing: policy.realtimeTracing ? "auto" : null,
         instructions: SESSION_INSTRUCTIONS,
       },
     }),

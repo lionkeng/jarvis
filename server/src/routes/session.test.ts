@@ -5,7 +5,7 @@ import type { ServerConfig } from "../config.js";
 const config: ServerConfig = {
   apiKey: "test-key", model: "gpt-realtime-2.1-mini", allowedOrigins: ["https://voice.example"], port: 3010,
   rateLimitRequests: 1, rateLimitWindowMs: 60_000, sessionBudgetRequests: 10, sessionBudgetWindowMs: 3_600_000,
-  maxOutputTokens: 512, contextTokenLimit: 4000,
+  maxOutputTokens: 512, contextTokenLimit: 4000, realtimeTracing: true,
 };
 const fetcher = async () => Response.json({ value: "ek_test", expires_at: Math.floor(Date.now() / 1000) + 60 });
 
@@ -51,6 +51,28 @@ describe("session route", () => {
         },
       },
     });
+  });
+
+  test("forwards server-owned realtime tracing into the provider session body", async () => {
+    const capture = async (realtimeTracing: boolean) => {
+      let providerBody: Record<string, unknown> | undefined;
+      const route = createSessionRoute({
+        config: { ...config, realtimeTracing },
+        fetcher: async (_input, init) => {
+          providerBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Response.json({ value: "ek_tracing", expires_at: Math.floor(Date.now() / 1000) + 60 });
+        },
+      });
+      const response = await route(new Request("http://localhost/session", {
+        method: "POST",
+        headers: { Origin: "https://voice.example" },
+      }));
+      expect(response.status).toBe(200);
+      return (providerBody as { session: { tracing: unknown } }).session.tracing;
+    };
+
+    expect(await capture(true)).toBe("auto");
+    expect(await capture(false)).toBeNull();
   });
 
   test("rejects malformed or out-of-policy session preferences", async () => {
