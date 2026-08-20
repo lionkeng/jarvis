@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RealtimeEventListener, RealtimeTransport } from "@jarvis-viz/core";
+import type { RealtimeEventListener, RealtimeToolResult, RealtimeTransport } from "@jarvis-viz/core";
 import { VoiceVizCanvas } from "./voice-viz-canvas.js";
 
 class FakeTransport implements RealtimeTransport {
@@ -11,6 +11,7 @@ class FakeTransport implements RealtimeTransport {
   disconnect = vi.fn(() => { this.connected = false; });
   async connect(): Promise<void> { this.connected = true; }
   subscribe(_listener: RealtimeEventListener): () => void { return vi.fn(); }
+  submitToolResult = vi.fn((_result: RealtimeToolResult) => undefined);
 }
 
 describe("VoiceVizCanvas", () => {

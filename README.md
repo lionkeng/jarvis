@@ -36,6 +36,14 @@ pnpm dev:all
 
 Open the demo, select **OpenAI live**, and connect the primary host to `http://localhost:3010/session`.
 
+## Voice-first demo
+
+Open `/voice.html#/dashboard`. Simulation mode needs no credentials. Live mode uses the same Bun session endpoint as the visualization lab.
+
+Spoken UI requests become one `perform_ui_actions` call. `VoiceViz` emits a `toolcall` event. A demo-only XState actor validates the call, runs a registered capability, and returns one result through `submitToolResult`. Ordinary questions stay in conversation and do not change the page.
+
+Supported commands are navigation, library selection, the details drawer, named-region scrolling, dashboard search focus, article bookmark activation, and theme selection. The model cannot choose CSS selectors, pointer coordinates, JavaScript, or URLs. XState is a demo dependency. It is not part of `@jarvis-viz/core`.
+
 ## Core usage
 
 ```ts

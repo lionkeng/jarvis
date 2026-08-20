@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceViz } from "../voice-viz.js";
 import { createIdleFeatures } from "../audio/idle-features.js";
 import type { VoiceFeatureSource } from "../audio/types.js";
-import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeTransport } from "../transport/types.js";
+import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "../transport/types.js";
 
 class FakeTransport implements RealtimeTransport {
   connected = false;
@@ -17,6 +17,7 @@ class FakeTransport implements RealtimeTransport {
     this.emit({ type: "connected" });
   }
   subscribe(listener: RealtimeEventListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  submitToolResult = vi.fn((_result: RealtimeToolResult) => undefined);
   emit(event: NormalizedRealtimeEvent): void { for (const listener of this.listeners) listener(event); }
 }
 
@@ -106,6 +107,30 @@ describe("VoiceViz integration", () => {
     expect(viz.transcript.getSnapshot().messages.at(-1)).toMatchObject({
       role: "agent", text: "A complete provider transcript", status: "complete",
     });
+    viz.unmount();
+  });
+
+  it("forwards a tool call to the host and a host result to the transport exactly once", async () => {
+    const mount = document.createElement("div");
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    const calls: RealtimeToolCall[] = [];
+    viz.on("toolcall", (call) => calls.push(call));
+    viz.mount(mount);
+    await viz.connect("/session");
+    transport.emit({ type: "user-speech-stopped" });
+    expect(viz.state).toBe("thinking");
+    const call = { callId: "call_ui", name: "perform_ui_actions", argumentsJson: "{\"actions\":[]}" };
+    transport.emit({ type: "tool-call", call });
+    expect(calls).toEqual([call]);
+    expect(viz.state).toBe("thinking");
+    expect(viz.transcript.getSnapshot().messages).toHaveLength(0);
+    transport.emit({ type: "response-done" });
+    expect(viz.state).toBe("idle");
+    const result = { callId: "call_ui", output: "{\"ok\":true}" };
+    viz.submitToolResult(result);
+    expect(transport.submitToolResult).toHaveBeenCalledOnce();
+    expect(transport.submitToolResult).toHaveBeenCalledWith(result);
     viz.unmount();
   });
 });

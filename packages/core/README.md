@@ -15,3 +15,7 @@ await viz.connect("/session");
 
 Call `unmount()` when the host is removed. The core package never accepts or exposes a
 long-lived provider API key.
+
+`VoiceViz` forwards finalized provider function calls as the `toolcall` event. Custom
+`RealtimeTransport` implementations must provide `submitToolResult`. Core keeps the
+argument JSON opaque. The host application parses meaning and executes UI effects.

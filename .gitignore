@@ -12,3 +12,4 @@ test-results/
 server/.env
 .env
 *.tgz
+thoughts/

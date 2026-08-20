@@ -11,7 +11,7 @@ describe("readConfig", () => {
   });
 
   test("rejects invalid startup limits and origin protocols", () => {
-    expect(() => readConfig({ OPENAI_API_KEY: "key", SERVER_PORT: "3010" })).toThrow("SERVER_PORT");
+    expect(() => readConfig({ OPENAI_API_KEY: "key", PORT: "99999" })).toThrow("PORT");
     expect(() => readConfig({ OPENAI_API_KEY: "key", MAX_OUTPUT_TOKENS: "4097" })).toThrow("MAX_OUTPUT_TOKENS");
     expect(() => readConfig({ OPENAI_API_KEY: "key", ALLOWED_ORIGINS: "javascript:alert(1)" })).toThrow("protocol");
   });

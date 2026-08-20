@@ -1,4 +1,4 @@
-import type { EphemeralSession, NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeTransport } from "./types.js";
+import type { EphemeralSession, NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolResult, RealtimeTransport } from "./types.js";
 
 type ProviderEvent = Record<string, unknown> & { type?: string };
 
@@ -48,6 +48,13 @@ export function normalizeOpenAIEvent(event: ProviderEvent): NormalizedRealtimeEv
     }
     case "response.done":
       return [{ type: "response-done" }, { type: "agent-audio-stopped" }];
+    case "response.function_call_arguments.done": {
+      const callId = stringField(event, "call_id");
+      const name = stringField(event, "name");
+      const argumentsJson = stringField(event, "arguments");
+      if (!callId || !name || argumentsJson === undefined) return [];
+      return [{ type: "tool-call", call: { callId, name, argumentsJson } }];
+    }
     case "error": {
       const providerError = event.error;
       const message = typeof providerError === "object" && providerError && "message" in providerError
@@ -202,6 +209,24 @@ export class OpenAIRealtimeTransport implements RealtimeTransport {
       this.#teardown();
       this.#emit({ type: "error", error: normalized });
       throw normalized;
+    }
+  }
+
+  submitToolResult(result: RealtimeToolResult): void {
+    const channel = this.#dataChannel;
+    if (!channel || channel.readyState !== "open") {
+      throw new Error("Realtime data channel is not open");
+    }
+    channel.send(JSON.stringify({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: result.callId,
+        output: result.output,
+      },
+    }));
+    if (result.continueResponse !== false) {
+      channel.send(JSON.stringify({ type: "response.create" }));
     }
   }
 

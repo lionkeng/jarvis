@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DemoVoiceFeatureSource } from "./demo-transport.js";
+import { DemoTransport, DemoVoiceFeatureSource } from "./demo-transport.js";
 
 describe("DemoVoiceFeatureSource", () => {
   it("keeps user/idle periods quiet and drives a speech-shaped remote-agent fixture", () => {
@@ -16,5 +16,14 @@ describe("DemoVoiceFeatureSource", () => {
     expect(speaking.silenceMs).toBe(0);
     expect(Math.max(...speaking.frequencyData)).toBeGreaterThan(idleFrequencyPeak);
     expect(speaking.waveformData).not.toEqual(idleWaveform);
+  });
+});
+
+describe("DemoTransport", () => {
+  it("records submitted tool results without emitting provider event names", () => {
+    const transport = new DemoTransport();
+    const result = { callId: "call_1", output: "{\"ok\":true}", continueResponse: true };
+    transport.submitToolResult(result);
+    expect(transport.submittedToolResults).toEqual([result]);
   });
 });
