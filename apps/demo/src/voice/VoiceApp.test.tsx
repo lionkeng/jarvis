@@ -154,6 +154,22 @@ describe("VoiceApp", () => {
     await unmountApp(root, host);
   });
 
+  it("posts the session endpoint when Connect is clicked in live mode", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "Origin is not allowed" }), { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await settle();
+    expect(namedButton(host, ".session", "Connect")).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    expect(fetchMock).toHaveBeenCalled();
+    const sessionCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/session"));
+    expect(sessionCall?.[0]).toBe("http://localhost:3010/session");
+    expect(host.querySelector(".toolbar span")?.textContent).toMatch(/Session endpoint failed|Origin is not allowed|Failed to fetch|Connecting/);
+    await unmountApp(root, host);
+  });
+
   it("answers an ordinary question without mutating UI state and cleans up on unmount", async () => {
     const { host, root } = await mountApp();
     await act(async () => { namedButton(host, ".scripts", "Ask an ordinary question").click(); });

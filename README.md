@@ -34,7 +34,7 @@ OR, to run both demo and the server,
 pnpm dev:all
 ```
 
-Open the demo, select **OpenAI live**, and connect the primary host to `http://localhost:3010/session`.
+Open `http://localhost:5180/`. Select **OpenAI live**, and connect the primary host to `http://localhost:3010/session`. Vite fails if port 5180 is already taken so the page origin stays on the allowlist.
 
 ## Voice-first demo
 
