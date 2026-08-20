@@ -1,4 +1,4 @@
-import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeTransport, VoiceFeatures, VoiceFeatureSource } from "@jarvis-viz/core";
+import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeToolResult, RealtimeTransport, VoiceFeatures, VoiceFeatureSource } from "@jarvis-viz/core";
 
 const SAMPLE_TURNS = [
   ["Map the strongest frequencies in my voice.", "The center ring follows level and onset. The surrounding field tracks spectral shape in real time."],
@@ -52,15 +52,21 @@ export class DemoTransport implements RealtimeTransport {
   #timers = new Set<number>();
   #connected = false;
   #turn = 0;
+  readonly #toolResults: RealtimeToolResult[] = [];
 
   constructor(readonly signal = new DemoVoiceFeatureSource()) {}
 
   get connected(): boolean { return this.#connected; }
   get agentAudio(): MediaStreamTrack | null { return null; }
+  get submittedToolResults(): readonly RealtimeToolResult[] { return this.#toolResults; }
 
   subscribe(listener: RealtimeEventListener): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  submitToolResult(result: RealtimeToolResult): void {
+    this.#toolResults.push(result);
   }
 
   async connect(): Promise<void> {

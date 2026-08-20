@@ -7,6 +7,7 @@ export default defineConfig({
       input: {
         demo: fileURLToPath(new URL("./index.html", import.meta.url)),
         embed: fileURLToPath(new URL("./embed.html", import.meta.url)),
+        voice: fileURLToPath(new URL("./voice.html", import.meta.url)),
       },
     },
   },

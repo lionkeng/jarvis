@@ -28,7 +28,7 @@ for (const file of sourceFiles(coreSource)) {
   if (file.includes("/render/") && /from ["'][^"']*(?:transport\/openai|audio\/media-stream-analyser)/.test(text)) {
     fail(file, "renderer code may consume leaf contracts, not transport or analyser implementations");
   }
-  if (!file.includes("/transport/openai.") && /(?:input_audio_buffer\.|response\.(?:audio|output_audio|audio_transcript|output_audio_transcript|text|output_text)|conversation\.item\.input_audio_transcription)/.test(text)) {
+  if (!file.includes("/transport/openai.") && /(?:input_audio_buffer\.|response\.(?:audio|output_audio|audio_transcript|output_audio_transcript|text|output_text|function_call_arguments|create\b)|conversation\.item\.(?:input_audio_transcription|create)|function_call_output)/.test(text)) {
     fail(file, "raw OpenAI event names belong only in transport/openai.ts");
   }
 }
@@ -38,12 +38,40 @@ for (const packageSource of [join(root, "packages/react/src"), join(root, "packa
     const text = readFileSync(file, "utf8");
     if (/from ["']@jarvis-viz\/core\//.test(text) || /packages\/core\/src/.test(text)) fail(file, "consumers must import the core public entry point");
     if (/from ["'][^"']*server\//.test(text)) fail(file, "browser packages must not import the Bun server");
+    if (!packageSource.includes(`${join("apps", "demo")}`) && /from ["'](?:xstate|@xstate\/react)["']/.test(text)) {
+      fail(file, "XState must not appear outside the demo");
+    }
   }
 }
 
 const demoTsconfig = join(root, "apps/demo/tsconfig.json");
 if (existsSync(demoTsconfig) && /packages\/(?:core|react)\/src/.test(readFileSync(demoTsconfig, "utf8"))) {
   fail(demoTsconfig, "the demo must consume built package entry points, not TypeScript source aliases");
+}
+
+function packageManifests(directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).flatMap((entry) => {
+    if (entry === "node_modules" || entry === "dist" || entry === ".git") return [];
+    const path = join(directory, entry);
+    return statSync(path).isDirectory() ? packageManifests(path) : entry === "package.json" ? [path] : [];
+  });
+}
+
+for (const file of packageManifests(root)) {
+  const rel = relative(root, file);
+  const manifest = JSON.parse(readFileSync(file, "utf8"));
+  const named = {
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+    ...manifest.optionalDependencies,
+    ...manifest.peerDependencies,
+  };
+  for (const dep of ["xstate", "@xstate/react"]) {
+    if (named[dep] && rel !== "apps/demo/package.json") {
+      fail(file, `${dep} is allowed only in apps/demo/package.json`);
+    }
+  }
 }
 
 const coreIndex = join(coreSource, "index.ts");

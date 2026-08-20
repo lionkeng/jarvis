@@ -5,15 +5,15 @@ The original repository was a single Vite playback experiment under root `src/`.
 ## Dependency direction
 
 ```text
-apps/demo ----------------┐
-packages/react -----------+--> packages/core --> @chenglou/pretext
-packages/wc --------------┘
+apps/demo (voice SPA + XState) ---+
+packages/react -------------------+--> packages/core --> @chenglou/pretext
+packages/wc ----------------------+
 
 browser --POST /session--> server (Bun) --> OpenAI client_secrets
-browser --WebRTC-------------------------> OpenAI realtime/calls
+browser --WebRTC (audio + tool calls) --> OpenAI realtime/calls
 ```
 
-`packages/core` has no React or server dependency. Renderer code consumes normalized state, features, regions, and theme contracts. Raw OpenAI event names are isolated to `packages/core/src/transport/openai.ts`. The Bun server contains no browser code and never receives conversation audio or transcript content.
+`packages/core` has no React, XState, or server dependency. Renderer code consumes normalized state, features, regions, and theme contracts. Raw OpenAI event names are isolated to `packages/core/src/transport/openai.ts`. The Bun server contains no browser code and never receives conversation audio, transcript content, or live tool calls after it mints the session. The voice-first demo owns the interaction actor and capability registry.
 
 ## Runtime ownership
 

@@ -103,6 +103,7 @@
         <a href="#modules">Modules</a>
         <a href="#conversation">Conversation timing</a>
         <a href="#states">State sequence</a>
+        <a href="#interaction">UI commands</a>
         <a href="#visualization">Visualization frame</a>
         <a href="#text">Audio-paced text</a>
         <a href="#simulation">Simulation</a>
@@ -143,7 +144,7 @@
           <h2 id="layout-title">Packages mirror the runtime boundaries.</h2>
           <p class="section-intro">The workspace keeps the library independent of React and custom elements. The demo is a host application. The server is a separate private BFF.</p>
           <pre class="tree" aria-label="Repository tree"><code>apps/
-  demo/                  <span data-source="apps/demo/src/App.tsx">React laboratory and live-session controls</span>
+  demo/                  <span data-source="apps/demo/src/App.tsx">React laboratory, embed host, and voice-first SPA</span>
 packages/
   core/                  <span data-source="packages/core/src/voice-viz.ts">framework-neutral VoiceViz runtime</span>
   react/                 <span data-source="packages/react/src/voice-viz-canvas.tsx">React lifecycle adapter</span>
@@ -176,7 +177,7 @@ scripts/                 <span data-source="scripts/check-boundaries.mjs">worksp
         <section id="conversation" aria-labelledby="conversation-title">
           <p class="label">ConversationSequence timing</p>
           <h2 id="conversation-title">A conversation crosses the BFF once, then stays peer to peer.</h2>
-          <p class="section-intro">The session request is an HTTP boundary. The live conversation is a WebRTC boundary. Orange regions show variable time that belongs to the network, provider, or browser. Fixed values below are local constants in the repository.</p>
+          <p class="section-intro">The session request is an HTTP boundary. The live conversation is a WebRTC boundary. Orange regions show variable time that belongs to the network, provider, or browser. Fixed values below are local constants in the repository. For the overloaded word "session", the mint secret, and when the live call ends, read <a href="what-is-a-session.html">What is a session</a>.</p>
           <div class="diagram" role="group" aria-labelledby="timing-title timing-desc">
             <svg viewBox="0 0 1120 560" role="img" aria-labelledby="timing-title timing-desc">
               <title id="timing-title">Live conversation timing diagram</title>
@@ -215,6 +216,96 @@ scripts/                 <span data-source="scripts/check-boundaries.mjs">worksp
           <div class="grid two" style="margin-top:22px"><article class="card"><h3>Interruption</h3><p>If a user starts speaking while the state is <code>speaking</code>, the machine enters <code>interrupted</code>. <code class="path" data-source="packages/core/src/voice-viz.ts">packages/core/src/voice-viz.ts</code> interrupts queued text and marks the agent transcript message interrupted.</p></article><article class="card"><h3>Failure and disconnect</h3><p>A normalized error enters <code>error</code>. A disconnect resets the machine to <code>idle</code>, detaches local browser media resources, and clears active audio text synchronization.</p></article></div>
         </section>
 
+        <section id="interaction" aria-labelledby="interaction-title">
+          <p class="label">UI command path</p>
+          <h2 id="interaction-title">UI commands ride the same Realtime channel.</h2>
+          <p class="section-intro">The BFF declares <code>perform_ui_actions</code> when it mints the session. After WebRTC starts, the BFF does not receive or execute tool calls. OpenAI sends a finalized function call to the browser. Core normalizes it. <code>VoiceViz</code> re-emits it. The demo parses it, runs an XState actor, and returns one structured result on the same data channel.</p>
+          <div class="diagram" role="group" aria-labelledby="interact-title interact-desc">
+            <svg viewBox="0 0 1120 420" role="img" aria-labelledby="interact-title interact-desc">
+              <title id="interact-title">Tool-call and tool-result lanes</title>
+              <desc id="interact-desc">OpenAI emits a function call to core. VoiceViz forwards it to the React host. An XState actor validates and executes registered capabilities. The host returns one function output on the Realtime data channel. The BFF is not on this live path.</desc>
+              <defs><marker id="interactArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#5be5d0"/></marker><marker id="interactAmber" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5bd6b"/></marker></defs>
+              <g font-family="ui-monospace, monospace" font-size="12" fill="#9eb9b5"><text x="48" y="28">INBOUND TOOL CALL</text><text x="48" y="248">OUTBOUND TOOL RESULT</text></g>
+              <g fill="#0d1b1a" stroke="#5be5d0" stroke-width="1.5">
+                <rect x="40" y="48" width="150" height="72" rx="4"/>
+                <rect x="230" y="48" width="150" height="72" rx="4"/>
+                <rect x="420" y="48" width="150" height="72" rx="4"/>
+                <rect x="610" y="48" width="150" height="72" rx="4"/>
+                <rect x="800" y="48" width="150" height="72" rx="4"/>
+                <rect x="990" y="48" width="90" height="72" rx="4"/>
+              </g>
+              <g font-family="ui-monospace, monospace" font-size="13" fill="#e7f4f0">
+                <text x="58" y="78">OpenAI</text>
+                <text x="248" y="78">core transport</text>
+                <text x="448" y="78">VoiceViz</text>
+                <text x="628" y="78">React host</text>
+                <text x="828" y="78">XState actor</text>
+                <text x="1004" y="78">registry</text>
+              </g>
+              <g font-family="ui-sans-serif, system-ui" font-size="11" fill="#9eb9b5">
+                <text x="58" y="98">function call</text>
+                <text x="248" y="98">neutral tool-call</text>
+                <text x="448" y="98">toolcall event</text>
+                <text x="628" y="98">parse + queue</text>
+                <text x="828" y="98">validate execute</text>
+                <text x="1004" y="98">effects</text>
+              </g>
+              <path d="M190 84H230" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#interactAmber)"/>
+              <path d="M380 84H420" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M570 84H610" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M760 84H800" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M950 84H990" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <g fill="#102724" stroke="#63827d"><rect x="40" y="148" width="1040" height="44" rx="4"/></g>
+              <text x="58" y="176" font-family="ui-sans-serif, system-ui" font-size="13" fill="#9eb9b5">Bun BFF declared the tool in POST /session. It is not on this live path.</text>
+              <g fill="#0d1b1a" stroke="#5be5d0" stroke-width="1.5">
+                <rect x="990" y="276" width="90" height="72" rx="4"/>
+                <rect x="800" y="276" width="150" height="72" rx="4"/>
+                <rect x="610" y="276" width="150" height="72" rx="4"/>
+                <rect x="420" y="276" width="150" height="72" rx="4"/>
+                <rect x="230" y="276" width="150" height="72" rx="4"/>
+                <rect x="40" y="276" width="150" height="72" rx="4"/>
+              </g>
+              <g font-family="ui-monospace, monospace" font-size="13" fill="#e7f4f0">
+                <text x="1004" y="306">result</text>
+                <text x="828" y="306">reporting</text>
+                <text x="628" y="306">result port</text>
+                <text x="438" y="306">submitToolResult</text>
+                <text x="248" y="306">data channel</text>
+                <text x="58" y="306">OpenAI</text>
+              </g>
+              <g font-family="ui-sans-serif, system-ui" font-size="11" fill="#9eb9b5">
+                <text x="1004" y="326">applied JSON</text>
+                <text x="828" y="326">exactly once</text>
+                <text x="628" y="326">voice only</text>
+                <text x="438" y="326">function output</text>
+                <text x="248" y="326">then response.create</text>
+                <text x="58" y="326">spoken follow-up</text>
+              </g>
+              <path d="M990 312H950" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M800 312H760" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M610 312H570" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M420 312H380" stroke="#5be5d0" stroke-width="2" marker-end="url(#interactArrow)"/>
+              <path d="M230 312H190" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#interactAmber)"/>
+            </svg>
+          </div>
+          <p class="diagram-note">Amber dashed arrows are provider events on the existing WebRTC data channel. Cyan arrows stay inside the application. Pointer and keyboard requests share the actor and skip the result port.</p>
+          <div class="state-flow" aria-label="Interaction lifecycle"><span class="state">ready</span><span class="arrow">→ dequeue →</span><span class="state">validating</span><span class="arrow">→ parse →</span><span class="state">executing</span><span class="arrow">→ capabilities →</span><span class="state">reporting</span><span class="arrow">→ one result →</span><span class="state">ready</span></div>
+          <div class="grid two" style="margin-top:22px">
+            <article class="card"><h3>Two machines, two jobs</h3><p>Input transcription fills the transcript store. Model function selection emits <code>perform_ui_actions</code>. The voice-session machine still uses <code>idle</code>, <code>listening</code>, <code>thinking</code>, <code>speaking</code>, <code>interrupted</code>, and <code>error</code>. The demo actor uses <code>ready</code>, <code>validating</code>, <code>executing</code>, and <code>reporting</code>. A <code>response.done</code> event returns the session machine to <code>idle</code>. It is not the UI command result.</p></article>
+            <article class="card"><h3>Bounds and exactly-once reporting</h3><p>The FIFO queue holds eight requests. Completed call IDs keep the last 64. Duplicate call IDs are ignored. Execution is ordered, one command at a time, with a 2,000 ms wait for a target to register. Cancellation stops remaining work and lists already applied effects. The actor submits one result per accepted voice call. A cancelled result sets <code>continueResponse</code> to false so no unsolicited spoken follow-up starts.</p></article>
+          </div>
+          <div class="module-list" style="margin-top:18px">
+            <article><h3><code class="path" data-source="packages/core/src/transport/types.ts">packages/core/src/transport/types.ts</code></h3><p>Defines provider-neutral <code>RealtimeToolCall</code> and <code>RealtimeToolResult</code>. Custom transports must implement <code>submitToolResult</code>.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/interaction-contract.ts">apps/demo/src/voice/interaction-contract.ts</code></h3><p>Parses untrusted tool JSON into a closed <code>UiCommand</code> union. Semantic IDs are registry keys. They are not CSS selectors, coordinates, or URLs.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/interaction-machine.ts">apps/demo/src/voice/interaction-machine.ts</code></h3><p>Owns the interaction lifecycle. XState lives only in the demo. Core, React adapters, and the BFF do not depend on it.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/capability-registry.ts">apps/demo/src/voice/capability-registry.ts</code></h3><p>Maps stable IDs to abortable effects. Page capabilities unregister on route change so a compound navigate-then-scroll waits for the new page.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/hash-router.ts">apps/demo/src/voice/hash-router.ts</code></h3><p>Keeps the four static routes in the URL hash. Unknown hashes fall back to dashboard.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/VoiceApp.tsx">apps/demo/src/voice/VoiceApp.tsx</code></h3><p>Wires <code>VoiceViz</code> events into the actor, mounts capabilities, and shows the activity panel. Source switching is locked while voice work is pending.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/pages.tsx">apps/demo/src/voice/pages.tsx</code></h3><p>Registers page capabilities and sends pointer and keyboard requests through the same typed command path. Capability execution does not synthesize clicks.</p></article>
+            <article><h3><code class="path" data-source="apps/demo/src/voice/voice-demo-transport.ts">apps/demo/src/voice/voice-demo-transport.ts</code></h3><p>Simulation scripts emit the same normalized tool-call events as live OpenAI. Ordinary questions emit speech with no tool call.</p></article>
+          </div>
+        </section>
+
         <section id="visualization" aria-labelledby="visualization-title">
           <p class="label">FramePipeline requestAnimationFrame</p>
           <h2 id="visualization-title">Every frame samples sound before it paints a layer.</h2>
@@ -247,18 +338,19 @@ scripts/                 <span data-source="scripts/check-boundaries.mjs">worksp
         <section id="simulation" aria-labelledby="simulation-title">
           <p class="label">Demo transport</p>
           <h2 id="simulation-title">Simulation uses the same events with fixed delays.</h2>
-          <p class="section-intro"><code class="path" data-source="apps/demo/src/demo-transport.ts">apps/demo/src/demo-transport.ts</code> implements the same transport shape as the live client. It makes the demo useful without credentials, but it does not model network or provider latency.</p>
-          <div class="grid two"><article class="card"><h3>Turn schedule</h3><p>The first synthetic user turn begins after <code>180 ms</code>. Synthetic speech lasts <code>650 ms</code>. The agent starts streaming after a further <code>460 ms</code>. Word chunks arrive every <code>135 ms</code>, and the next turn starts after <code>1,600 ms</code>.</p></article><article class="card"><h3>Synthetic signal</h3><p><code>DemoVoiceFeatureSource</code> writes deterministic-shaped frequency and waveform arrays. It reports a low idle signal. During agent speech, it varies level, onset, centroid, and waveform phase so the same canvas path remains active.</p></article></div>
+          <p class="section-intro"><code class="path" data-source="apps/demo/src/demo-transport.ts">apps/demo/src/demo-transport.ts</code> implements the same transport shape as the live client for the visualization lab. <code class="path" data-source="apps/demo/src/voice/voice-demo-transport.ts">apps/demo/src/voice/voice-demo-transport.ts</code> does the same for the voice-first app, including tool-call parity. Neither models network or provider latency.</p>
+          <div class="grid two"><article class="card"><h3>Lab turn schedule</h3><p>The first synthetic user turn begins after <code>180 ms</code>. Synthetic speech lasts <code>650 ms</code>. The agent starts streaming after a further <code>460 ms</code>. Word chunks arrive every <code>135 ms</code>, and the next turn starts after <code>1,600 ms</code>.</p></article><article class="card"><h3>Synthetic signal</h3><p><code>DemoVoiceFeatureSource</code> writes deterministic-shaped frequency and waveform arrays. It reports a low idle signal. During agent speech, it varies level, onset, centroid, and waveform phase so the same canvas path remains active.</p></article></div>
+          <div class="grid two" style="margin-top:18px"><article class="card"><h3>Voice-first scripts</h3><p>Each UI script emits speech boundaries, user text, and one normalized <code>tool-call</code> with a unique call ID. Ordinary Q&amp;A emits an assistant response with no tool call and leaves UI state unchanged.</p></article><article class="card"><h3>Result acknowledgement</h3><p><code>submitToolResult</code> records the matching call ID. Successful and failed results stream a short agent transcript. A cancelled result with <code>continueResponse</code> set to false does not start that follow-up.</p></article></div>
         </section>
 
         <section id="gotchas" aria-labelledby="gotchas-title">
           <p class="label">Operational notes</p>
           <h2 id="gotchas-title">A few boundaries are easy to miss.</h2>
-          <div class="grid two"><article class="card"><h3>The BFF has no application authentication</h3><p>Origin checks and in-memory budgets constrain the demo service. They do not identify users. Production deployments need application authentication and durable, shared limits if multiple instances run.</p></article><article class="card"><h3>The BFF keeps no conversation data</h3><p>The server retains only in-memory origin rate-limit and session-budget counters. The transcript store lives in the browser process for the mounted visualization.</p></article><article class="card"><h3>Remote audio is deliberately attached</h3><p><code class="path" data-source="packages/core/src/voice-viz.ts">VoiceViz</code> creates a muted autoplay audio element for the remote stream and also connects the analyser to the audio context destination. The analyser has a <code>monitor</code> option for direct use.</p></article><article class="card"><h3>Check the environment variable name</h3><p><code class="path" data-source="server/src/config.ts">server/src/config.ts</code> reads <code>PORT</code> and defaults to <code>3010</code>. <code class="path" data-source="server/.env.example">server/.env.example</code> still lists <code>SERVER_PORT</code>. That variable is ignored by the current config.</p></article><article class="card"><h3>Provider policy is server-owned</h3><p><code class="path" data-source="server/src/providers/openai-session.ts">openai-session.ts</code> sets output voice <code>echo</code> and input transcription language <code>zh</code>. The browser sends response timing and speech rate, but it never receives the standard API key.</p></article><article class="card"><h3>Custom elements isolate their own CSS</h3><p><code class="path" data-source="packages/wc/src/voice-viz-element.ts">VoiceVizElement</code> mounts inside an open Shadow DOM root. The internal canvas and styles do not inherit a host page's global canvas styling.</p></article></div>
+          <div class="grid two"><article class="card"><h3>The BFF has no application authentication</h3><p>Origin checks and in-memory budgets constrain the demo service. They do not identify users. Production deployments need application authentication and durable, shared limits if multiple instances run.</p></article><article class="card"><h3>The BFF keeps no conversation data</h3><p>The server retains only in-memory origin rate-limit and session-budget counters. The transcript store lives in the browser process for the mounted visualization.</p></article><article class="card"><h3>Remote audio is deliberately attached</h3><p><code class="path" data-source="packages/core/src/voice-viz.ts">VoiceViz</code> creates a muted autoplay audio element for the remote stream and also connects the analyser to the audio context destination. The analyser has a <code>monitor</code> option for direct use.</p></article><article class="card"><h3>Check the environment variable name</h3><p><code class="path" data-source="server/src/config.ts">server/src/config.ts</code> reads <code>PORT</code> and defaults to <code>3010</code>. <code class="path" data-source="server/.env.example">server/.env.example</code> still lists <code>SERVER_PORT</code>. That variable is ignored by the current config.</p></article><article class="card"><h3>Provider policy is server-owned</h3><p><code class="path" data-source="server/src/providers/openai-session.ts">openai-session.ts</code> sets output voice <code>echo</code> and input transcription language <code>zh</code>. The browser sends response timing and speech rate, but it never receives the standard API key. The same request also declares <code>perform_ui_actions</code>. Tool calls still travel browser to OpenAI, not through the BFF.</p></article><article class="card"><h3>Custom elements isolate their own CSS</h3><p><code class="path" data-source="packages/wc/src/voice-viz-element.ts">VoiceVizElement</code> mounts inside an open Shadow DOM root. The internal canvas and styles do not inherit a host page's global canvas styling.</p></article><article class="card"><h3>The data channel must be open</h3><p><code>submitToolResult</code> throws when the Realtime data channel is missing or not open. The interaction actor treats that as a reporting failure rather than dropping the result silently.</p></article><article class="card"><h3>Disconnect can beat the result</h3><p>If the session disconnects before the actor sends the function output, remaining actions stop and the app records that reporting could not complete. Reconnect starts a fresh session. Do not switch simulation and live sources while voice work is pending.</p></article></div>
         </section>
       </main>
     </div>
-    <footer>Source-backed architecture reference. Run <code>node scripts/check-architecture-doc.mjs</code> after changing this page.</footer>
+    <footer>Source-backed architecture reference. Companion explanation: <a href="what-is-a-session.html">What is a session</a>. Run <code>pnpm check:architecture</code> after changing this page.</footer>
   </div>
   <script>
     const links = [...document.querySelectorAll('nav a')];

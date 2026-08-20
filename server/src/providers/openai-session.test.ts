@@ -27,6 +27,33 @@ describe("createOpenAIClientSecret", () => {
     expect(body.session.audio.input.turn_detection.eagerness).toBe("high");
     expect(body.session.audio.output).toEqual({ voice: "echo", speed: 1.15 });
     expect(body.session.truncation.token_limits.post_instructions).toBe(4000);
+    expect(body.session.tool_choice).toBe("auto");
+    expect(body.session.tools).toHaveLength(1);
+    expect(body.session.tools[0].name).toBe("perform_ui_actions");
+    expect(body.session.tools[0].type).toBe("function");
+    expect(body.session.tools[0].parameters.additionalProperties).toBe(false);
+    expect(body.session.tools[0].parameters.required).toEqual(["actions"]);
+    expect(body.session.tools[0].parameters.properties.actions.minItems).toBe(1);
+    expect(body.session.tools[0].parameters.properties.actions.maxItems).toBe(5);
+    expect(body.session.tools[0].parameters.properties.actions.items.additionalProperties).toBe(false);
+    expect(body.session.tools[0].parameters.properties.actions.items.properties.type.enum).toEqual([
+      "navigate", "open", "close", "select", "scroll", "focus", "activate",
+    ]);
+    expect(body.session.tools[0].parameters.properties.actions.items.properties.target.enum).toEqual([
+      "dashboard", "library", "article", "settings",
+      "library.details", "library.item", "settings.theme",
+      "article.content", "library.results", "dashboard.search", "article.bookmark",
+    ]);
+    expect(body.session.tools[0].parameters.properties.actions.items.properties.direction.enum).toEqual([
+      "up", "down", "top", "bottom",
+    ]);
+    expect(body.session.tools[0].parameters.properties.actions.items.properties.value.enum).toEqual([
+      "atlas", "beacon", "cinder", "light", "dark", "system",
+    ]);
+    expect(body.session.instructions).toContain("You are a concise voice assistant");
+    expect(body.session.instructions).toContain("Use perform_ui_actions only for UI mutations");
+    expect(body.session.instructions).toContain("Answer ordinary informational questions");
+    expect(body.session.instructions).toContain("Never invent CSS selectors, pointer coordinates, JavaScript, URLs");
     expect((request?.headers as Record<string, string>).Authorization).toBe("Bearer server-key");
   });
 

@@ -1,0 +1,150 @@
+:root {
+  color-scheme: dark;
+  --bg: #070b0d;
+  --ink: #d5e2e5;
+  --muted: #9bafb4;
+  --line: #263237;
+  --panel: #0d1417;
+  --accent: #66d9d0;
+  --accent-ink: #07100f;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f7f7;
+  --ink: #102226;
+  --muted: #4d6368;
+  --line: #c9d5d8;
+  --panel: #ffffff;
+  --accent: #0f766e;
+  --accent-ink: #f4fffd;
+}
+
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] {
+    color-scheme: light;
+    --bg: #f4f7f7;
+    --ink: #102226;
+    --muted: #4d6368;
+    --line: #c9d5d8;
+    --panel: #ffffff;
+    --accent: #0f766e;
+    --accent-ink: #f4fffd;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 300px; min-height: 100dvh; background: var(--bg); }
+button, input, select, a { font: inherit; }
+button, select, input {
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+button { min-height: 38px; padding: 0 14px; cursor: pointer; }
+button:hover, a:hover { border-color: var(--accent); }
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:disabled, input:disabled { cursor: not-allowed; opacity: .62; }
+button.active, button[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.voice-app {
+  width: min(1280px, 100%);
+  margin: 0 auto;
+  padding: 24px clamp(16px, 3vw, 40px) 64px;
+  display: grid;
+  gap: 20px;
+}
+.voice-app header h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: -.04em; }
+.kicker { margin: 0 0 8px; color: var(--accent); font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+.intro { margin: 8px 0 0; color: var(--muted); max-width: 62ch; }
+
+.toolbar, .scripts, .session {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.session { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.session label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.session input, .session select { min-height: 38px; padding: 0 10px; }
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, .8fr);
+  gap: 20px;
+}
+nav.routes { display: flex; gap: 8px; flex-wrap: wrap; }
+nav.routes a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 12px;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+nav.routes a[aria-current="page"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.page {
+  min-height: 420px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.page h2 { margin: 0 0 12px; }
+.voice-id { margin-left: 8px; color: var(--muted); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.search { width: min(100%, 360px); min-height: 40px; padding: 0 12px; }
+.cards { display: grid; gap: 10px; }
+.cards button { text-align: left; }
+.scroll-region {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 8px;
+  border-top: 1px solid var(--line);
+}
+.article-body { max-height: 280px; overflow: auto; line-height: 1.55; }
+.drawer {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.stage { height: 220px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #070b0d; }
+.side { display: grid; gap: 16px; }
+.activity, .transcript-wrap {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.activity dl { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
+.activity dt { color: var(--muted); }
+.live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+@media (max-width: 860px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .stage { height: 180px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}

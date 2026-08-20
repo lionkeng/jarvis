@@ -10,6 +10,18 @@ export interface RealtimeSessionPreferences {
   speechRate?: number;
 }
 
+export interface RealtimeToolCall {
+  callId: string;
+  name: string;
+  argumentsJson: string;
+}
+
+export interface RealtimeToolResult {
+  callId: string;
+  output: string;
+  continueResponse?: boolean;
+}
+
 export type NormalizedRealtimeEvent =
   | { type: "connected" }
   | { type: "disconnected" }
@@ -22,6 +34,7 @@ export type NormalizedRealtimeEvent =
   | { type: "agent-text-done"; text?: string; audioSynchronized?: boolean }
   | { type: "response-done" }
   | { type: "agent-track"; stream: MediaStream; track: MediaStreamTrack }
+  | { type: "tool-call"; call: RealtimeToolCall }
   | { type: "error"; error: Error };
 
 export type RealtimeEventListener = (event: NormalizedRealtimeEvent) => void;
@@ -32,4 +45,5 @@ export interface RealtimeTransport {
   connect(tokenEndpoint: string, preferences?: RealtimeSessionPreferences): Promise<void>;
   disconnect(): void;
   subscribe(listener: RealtimeEventListener): () => void;
+  submitToolResult(result: RealtimeToolResult): void;
 }

@@ -27,6 +27,58 @@ const TIMING_POLICY: Record<ResponseTiming, {
 
 const TRANSCRIPTION_LANGUAGE = "zh";
 
+const UI_ACTION_TYPES = ["navigate", "open", "close", "select", "scroll", "focus", "activate"] as const;
+const UI_TARGETS = [
+  "dashboard",
+  "library",
+  "article",
+  "settings",
+  "library.details",
+  "library.item",
+  "settings.theme",
+  "article.content",
+  "library.results",
+  "dashboard.search",
+  "article.bookmark",
+] as const;
+const UI_DIRECTIONS = ["up", "down", "top", "bottom"] as const;
+const UI_VALUES = ["atlas", "beacon", "cinder", "light", "dark", "system"] as const;
+
+const PERFORM_UI_ACTIONS_TOOL = {
+  type: "function",
+  name: "perform_ui_actions",
+  description: "Change this demo's UI with one to five ordered semantic actions. Use only when the user asks to navigate, open or close the library details, select a library item or theme, scroll a named region, focus dashboard search, or activate the article bookmark.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    required: ["actions"],
+    properties: {
+      actions: {
+        type: "array",
+        minItems: 1,
+        maxItems: 5,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["type"],
+          properties: {
+            type: { type: "string", enum: UI_ACTION_TYPES },
+            target: { type: "string", enum: UI_TARGETS },
+            direction: { type: "string", enum: UI_DIRECTIONS },
+            value: { type: "string", enum: UI_VALUES },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+const SESSION_INSTRUCTIONS = [
+  "You are a concise voice assistant. Prefer short spoken answers unless the user asks for detail.",
+  "Use perform_ui_actions only for UI mutations in this demo. Answer ordinary informational questions by speaking and do not call the tool for those.",
+  "Preserve the user's requested action order. Never invent CSS selectors, pointer coordinates, JavaScript, URLs, or targets outside the tool schema.",
+].join(" ");
+
 export async function createOpenAIClientSecret(apiKey: string, policy: OpenAISessionPolicy, fetcher: FetchLike = fetch, now: () => number = Date.now): Promise<ClientSecretResponse> {
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const timing = TIMING_POLICY[policy.preferences.responseTiming];
@@ -57,7 +109,9 @@ export async function createOpenAIClientSecret(apiKey: string, policy: OpenAISes
           retention_ratio: 0.8,
           token_limits: { post_instructions: policy.contextTokenLimit },
         },
-        instructions: "You are a concise voice assistant. Prefer short spoken answers unless the user asks for detail.",
+        tools: [PERFORM_UI_ACTIONS_TOOL],
+        tool_choice: "auto",
+        instructions: SESSION_INSTRUCTIONS,
       },
     }),
   });

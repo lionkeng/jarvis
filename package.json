@@ -9,11 +9,12 @@
     "dev:server": "pnpm --filter @jarvis-viz/server dev",
     "dev:all": "pnpm --parallel --stream --filter @jarvis-viz/demo --filter @jarvis-viz/server dev",
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:architecture": "node scripts/check-architecture-doc.mjs",
     "check:packages": "node scripts/check-packages.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "build": "pnpm -r --if-present build",
-    "verify": "pnpm check:boundaries && pnpm typecheck && pnpm test && pnpm build && pnpm check:packages"
+    "verify": "pnpm check:boundaries && pnpm typecheck && pnpm test && pnpm build && pnpm check:packages && pnpm check:architecture"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",

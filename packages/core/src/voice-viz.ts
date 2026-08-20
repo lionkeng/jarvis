@@ -16,7 +16,7 @@ import { StreamingTextPanel } from "./text/streaming-panel.js";
 import { TranscriptStore } from "./transcript/store.js";
 import type { TranscriptSnapshot } from "./transcript/types.js";
 import { OpenAIRealtimeTransport } from "./transport/openai.js";
-import type { NormalizedRealtimeEvent, RealtimeSessionPreferences, RealtimeTransport } from "./transport/types.js";
+import type { NormalizedRealtimeEvent, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "./transport/types.js";
 
 export interface VoiceVizOptions {
   presets?: readonly PresetName[];
@@ -32,6 +32,7 @@ export interface VoiceVizOptions {
 export interface VoiceVizEventMap {
   statechange: { state: AgentState; previous: AgentState };
   transcriptchange: TranscriptSnapshot;
+  toolcall: RealtimeToolCall;
   error: { error: Error };
 }
 
@@ -187,6 +188,10 @@ export class VoiceViz {
     this.#audioText.setRateMultiplier(multiplier);
   }
 
+  submitToolResult(result: RealtimeToolResult): void {
+    this.#transport.submitToolResult(result);
+  }
+
   on<K extends VoiceVizEventName>(name: K, listener: VoiceVizEventListener<K>): () => void {
     const listeners = this.#listeners.get(name) ?? new Set();
     listeners.add(listener as (value: never) => void);
@@ -263,6 +268,9 @@ export class VoiceViz {
       case "agent-track":
         this.#attachAudio(event.stream);
         break;
+      case "tool-call":
+        this.#emit("toolcall", event.call);
+        break;
       case "error":
         this.#audioText.interrupt();
         this.#panel.finish(now);
@@ -270,6 +278,10 @@ export class VoiceViz {
         this.#dispatch({ type: "fail", error: event.error });
         this.#emit("error", { error: event.error });
         break;
+      default: {
+        const _exhaustive: never = event;
+        return _exhaustive;
+      }
     }
   }
 

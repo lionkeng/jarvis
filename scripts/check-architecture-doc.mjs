@@ -13,7 +13,7 @@ function expect(condition, message) {
   if (!condition) failures.push(message);
 }
 
-const requiredSections = ["system", "layout", "modules", "conversation", "states", "visualization", "text", "simulation", "gotchas"];
+const requiredSections = ["system", "layout", "modules", "conversation", "states", "interaction", "visualization", "text", "simulation", "gotchas"];
 for (const id of requiredSections) expect(document.getElementById(id), `missing #${id}`);
 
 expect(document.querySelectorAll("h1").length === 1, "the document must contain exactly one h1");
@@ -40,10 +40,15 @@ for (const element of document.querySelectorAll("[src], link[href], a[href]")) {
 const facts = [
   "20,000 ms", "18 chars/s", "850 ms", "5,000 ms", "250 ms", "100 ms", "2048", "0.78", "640", "echo", "zh",
   "idle", "listening", "thinking", "speaking", "interrupted", "error",
+  "perform_ui_actions",
   "bars", "waveform", "ring", "particles", "hud",
   "Network timing is variable", "Provider turn detection and transcription timing are variable",
 ];
 for (const fact of facts) expect(html.includes(fact), `missing required fact: ${fact}`);
+
+for (const state of ["ready", "validating", "executing", "reporting"]) {
+  expect(html.includes(`<span class="state">${state}</span>`), `missing interaction state ${state}`);
+}
 
 for (const element of document.querySelectorAll("[data-source]")) {
   const source = element.getAttribute("data-source");

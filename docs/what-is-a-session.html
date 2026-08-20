@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>What is a session</title>
+  <style>
+    :root { --ink:#e7f4f0; --muted:#9eb9b5; --dim:#63827d; --line:#24433f; --panel:#0d1b1a; --panel-2:#102724; --ground:#06100f; --cyan:#5be5d0; --amber:#f5bd6b; --red:#ff8a8a; --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; --sans:Inter, ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; background:var(--ground); }
+    body { margin:0; color:var(--ink); background:radial-gradient(circle at 80% 0%, #143531 0, transparent 28rem), var(--ground); font:16px/1.55 var(--sans); }
+    a { color:var(--cyan); text-underline-offset:3px; }
+    a:focus-visible, button:focus-visible { outline:3px solid var(--amber); outline-offset:4px; }
+    code, kbd { font-family:var(--mono); font-size:.9em; color:#bdf8ed; }
+    .shell { width:min(1480px, 100%); margin:auto; padding:0 32px 72px; }
+    .masthead { min-height:220px; display:grid; align-content:center; grid-template-columns:minmax(0, 1fr) minmax(240px, .45fr); gap:40px; border-bottom:1px solid var(--line); }
+    .eyebrow, .label { margin:0 0 12px; color:var(--cyan); font:700 12px/1.2 var(--mono); letter-spacing:.14em; text-transform:uppercase; }
+    h1, h2, h3, p { margin-top:0; }
+    h1 { max-width:900px; margin-bottom:16px; font-size:clamp(2.2rem, 6vw, 4.8rem); letter-spacing:-.07em; line-height:.92; }
+    h2 { margin-bottom:18px; font-size:clamp(1.5rem, 2.8vw, 2.3rem); letter-spacing:-.045em; line-height:1.05; }
+    h3 { font-size:1rem; margin-bottom:7px; }
+    .lede { max-width:52ch; font-size:1.13rem; color:#cae1dc; }
+    .card, .note { border:1px solid var(--line); background:linear-gradient(135deg, rgba(16,39,36,.94), rgba(7,19,18,.88)); box-shadow:0 16px 42px rgba(0,0,0,.18); }
+    .mast-facts { align-self:center; padding:20px; border-left:2px solid var(--cyan); }
+    .mast-facts span { display:block; color:var(--muted); font-size:.9rem; }
+    .mast-facts strong { display:block; margin:2px 0 14px; font:700 1rem var(--mono); }
+    .mast-facts strong:last-child { margin-bottom:0; }
+    .body-grid { display:grid; grid-template-columns:220px minmax(0, 1fr); gap:clamp(32px, 6vw, 88px); }
+    nav { position:sticky; top:0; height:100vh; padding:36px 0; align-self:start; }
+    nav p { margin-bottom:12px; color:var(--dim); font:700 11px var(--mono); letter-spacing:.13em; text-transform:uppercase; }
+    nav a { display:block; padding:7px 0 7px 14px; color:var(--muted); border-left:1px solid var(--line); text-decoration:none; font-size:.9rem; }
+    nav a:hover, nav a[aria-current="true"] { color:var(--ink); border-color:var(--cyan); }
+    main { min-width:0; }
+    section { padding:64px 0; border-bottom:1px solid var(--line); scroll-margin-top:16px; }
+    .section-intro { max-width:75ch; color:var(--muted); }
+    .grid { display:grid; gap:18px; }
+    .three { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .two { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .card { padding:20px; }
+    .card p:last-child { margin-bottom:0; }
+    .number { color:var(--cyan); font:700 12px var(--mono); letter-spacing:.1em; }
+    .diagram { margin:28px 0 14px; padding:20px; overflow:auto; border:1px solid var(--line); background:#071514; }
+    svg { display:block; width:100%; min-width:720px; height:auto; }
+    .diagram-note { max-width:82ch; padding-left:16px; border-left:2px solid var(--cyan); color:var(--muted); }
+    .legend { display:flex; flex-wrap:wrap; gap:12px 18px; padding:0; list-style:none; color:var(--muted); font-size:.88rem; }
+    .legend i { display:inline-block; width:11px; height:11px; margin-right:6px; border-radius:50%; background:var(--cyan); }
+    .legend .variable { background:var(--amber); }
+    .path { display:inline-block; margin:3px 0; padding:3px 7px; border:1px solid #28544e; background:#0a211f; }
+    .path::before { content:"/"; color:var(--dim); }
+    .sequence { display:grid; gap:0; margin-top:24px; border:1px solid var(--line); }
+    .sequence article { display:grid; grid-template-columns:116px minmax(0, 1fr); gap:18px; padding:18px; border-bottom:1px solid var(--line); background:var(--panel); }
+    .sequence article:last-child { border-bottom:0; }
+    .sequence time { color:var(--cyan); font:700 12px var(--mono); }
+    .state-flow { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:20px; }
+    .state { padding:8px 10px; border:1px solid var(--line); background:var(--panel); font:700 12px var(--mono); }
+    .arrow { color:var(--dim); }
+    .state.error { border-color:#8d4747; color:var(--red); }
+    .warning { padding:18px 20px; border-left:3px solid var(--amber); background:rgba(88,59,25,.23); }
+    .warning strong { color:#ffd89a; }
+    .companion { margin-top:24px; max-width:70ch; color:var(--muted); }
+    footer { padding:30px 0; color:var(--dim); font-size:.9rem; }
+    @media (max-width:900px) { .masthead, .body-grid { grid-template-columns:1fr; } nav { position:sticky; z-index:2; display:flex; gap:14px; overflow:auto; height:auto; padding:12px 0; background:rgba(6,16,15,.94); backdrop-filter:blur(10px); } nav p { display:none; } nav a { white-space:nowrap; padding:7px 0; border-left:0; border-bottom:1px solid var(--line); } nav a:hover, nav a[aria-current="true"] { border-color:var(--cyan); } .two, .three { grid-template-columns:1fr; } }
+    @media (max-width:640px) { .shell { padding:0 18px 48px; } .masthead { min-height:0; padding:72px 0 36px; } section { padding:48px 0; } .sequence article { grid-template-columns:1fr; gap:7px; } .diagram { padding:12px; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
+    @media print { :root { --ink:#111; --muted:#384643; --line:#9bb1ab; --panel:#fff; --ground:#fff; --cyan:#066b5e; } body { background:#fff; color:#111; font-size:10pt; } .shell { width:100%; padding:0; } .masthead { min-height:0; padding:0 0 18pt; } nav { display:none; } section { padding:24pt 0; break-inside:avoid; } .card, .diagram { box-shadow:none; background:#fff; } a { color:#075e53; } .diagram { overflow:visible; } svg { min-width:0; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">Jarvis Voice Visualization explanation</p>
+        <h1>What is a session</h1>
+        <p class="lede">In Jarvis the word "session" names three different lifetimes. People mix up the short mint HTTP call, the live WebRTC peer connection, and the UI turn state that resets on every answer. Those are not the same thing.</p>
+      </div>
+      <aside class="mast-facts card" aria-label="Related reading">
+        <span>Companion to</span><strong><a href="architecture.html">architecture.html</a></strong>
+        <span>Mode</span><strong>Explanation</strong>
+        <span>Confusion</span><strong>Overloaded "session"</strong>
+      </aside>
+    </header>
+
+    <div class="body-grid">
+      <nav aria-label="Explanation sections">
+        <p>On this page</p>
+        <a href="#three-meanings">Three meanings</a>
+        <a href="#data-flow">Data flow</a>
+        <a href="#secret">How the secret is used</a>
+        <a href="#call-ends">When the call ends</a>
+        <a href="#budget">Session budget</a>
+      </nav>
+
+      <main>
+        <section id="three-meanings" aria-labelledby="three-title">
+          <p class="label">Overloaded word</p>
+          <h2 id="three-title">Three meanings of "session"</h2>
+          <p class="section-intro">When someone says "the session ended", ask which lifetime they mean. Jarvis uses the same English word for a mint request, a live Realtime call, and a voice UI turn.</p>
+          <div class="grid three" style="margin-top:22px">
+            <article class="card">
+              <p class="number">01 · MINT</p>
+              <h3>HTTP mint request</h3>
+              <p><code>POST /session</code> asks the Bun BFF for an ephemeral OpenAI Realtime client secret (<code>ek_*</code>). That "session" ends when the HTTP response returns. The route lives in <code class="path" data-source="server/src/routes/session.ts">server/src/routes/session.ts</code>. The provider mint lives in <code class="path" data-source="server/src/providers/openai-session.ts">server/src/providers/openai-session.ts</code>.</p>
+            </article>
+            <article class="card">
+              <p class="number">02 · LIVE CALL</p>
+              <h3>WebRTC Realtime call</h3>
+              <p>After the secret arrives, the browser opens a peer connection to OpenAI. Microphone audio, remote agent audio, and the <code>oai-events</code> data channel share that one connection. Many speak, think, and answer turns can run on it. Transport code lives in <code class="path" data-source="packages/core/src/transport/openai.ts">packages/core/src/transport/openai.ts</code>.</p>
+            </article>
+            <article class="card">
+              <p class="number">03 · UI STATE</p>
+              <h3>Voice UI state machine</h3>
+              <p>Core tracks <code>idle</code>, <code>listening</code>, <code>thinking</code>, <code>speaking</code>, <code>interrupted</code>, and <code>error</code> in <code class="path" data-source="packages/core/src/state/state-machine.ts">packages/core/src/state/state-machine.ts</code>. A <code>response.done</code> event returns the machine to <code>idle</code> so the next turn can start. That return to idle is not a teardown of the WebRTC call.</p>
+            </article>
+          </div>
+          <div class="state-flow" aria-label="UI turn cycle inside one live call">
+            <span class="state">idle</span><span class="arrow">→ listen →</span>
+            <span class="state">listening</span><span class="arrow">→ stop →</span>
+            <span class="state">thinking</span><span class="arrow">→ audio →</span>
+            <span class="state">speaking</span><span class="arrow">→ response.done →</span>
+            <span class="state">idle</span>
+          </div>
+          <p class="companion">One live call can walk that loop many times. The peer connection stays up while the UI state keeps returning to idle.</p>
+        </section>
+
+        <section id="data-flow" aria-labelledby="flow-title">
+          <p class="label">SessionSequence timing</p>
+          <h2 id="flow-title">Data crosses the BFF once, then stays peer to peer.</h2>
+          <p class="section-intro">Cyan arrows are application hops you own. Amber dashed arrows are provider or network work whose timing varies. After step 4, the Bun BFF is off the path.</p>
+          <div class="diagram" role="group" aria-labelledby="flow-diagram-title flow-diagram-desc">
+            <svg viewBox="0 0 1120 560" role="img" aria-labelledby="flow-diagram-title flow-diagram-desc">
+              <title id="flow-diagram-title">Session data-flow timing diagram</title>
+              <desc id="flow-diagram-desc">The browser posts preferences to the Bun BFF. The BFF mints an ephemeral client secret from OpenAI with the long-lived API key and returns that secret. The browser posts an SDP offer to OpenAI with the secret as Bearer. After the SDP answer, mic audio, remote audio, and oai-events travel browser to OpenAI over WebRTC while the BFF stays off the live path. response.done returns UI state to idle without ending the call. disconnect tears the peer down.</desc>
+              <defs>
+                <marker id="flowArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#5be5d0"/></marker>
+                <marker id="flowVariable" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5bd6b"/></marker>
+              </defs>
+              <g font-family="ui-monospace, monospace" font-size="13" fill="#e7f4f0"><text x="130" y="30">browser</text><text x="460" y="30">Bun BFF</text><text x="780" y="30">OpenAI Realtime</text></g>
+              <g stroke="#41615c" stroke-width="1" stroke-dasharray="4 6"><path d="M170 48V530"/><path d="M500 48V530"/><path d="M820 48V530"/></g>
+              <g font-family="ui-monospace, monospace" font-size="11"><text x="16" y="84" fill="#9eb9b5">1</text><text x="16" y="132" fill="#9eb9b5">2</text><text x="16" y="180" fill="#9eb9b5">3</text><text x="16" y="228" fill="#9eb9b5">4</text><text x="16" y="276" fill="#9eb9b5">5</text><text x="16" y="324" fill="#9eb9b5">6</text><text x="16" y="388" fill="#9eb9b5">7</text><text x="16" y="448" fill="#9eb9b5">8</text><text x="16" y="508" fill="#9eb9b5">9</text></g>
+              <path d="M170 78H500" stroke="#5be5d0" stroke-width="2" marker-end="url(#flowArrow)"/><text x="248" y="70" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">POST /session preferences</text>
+              <path d="M500 126H820" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="552" y="118" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">client_secrets + OPENAI_API_KEY</text>
+              <path d="M820 174H500" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="574" y="166" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">ephemeral client secret (ek_*)</text>
+              <path d="M500 222H170" stroke="#5be5d0" stroke-width="2" marker-end="url(#flowArrow)"/><text x="268" y="214" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">JSON value (+ expires_at)</text>
+              <path d="M170 270H820" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="336" y="262" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">POST /v1/realtime/calls SDP offer + Bearer ek_*</text>
+              <path d="M820 318H170" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="390" y="310" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">SDP answer, then WebRTC ready</text>
+              <g fill="#19322e" stroke="#5be5d0"><rect x="209" y="348" width="570" height="52" rx="4"/></g>
+              <text x="226" y="372" font-family="ui-sans-serif, system-ui" font-size="13" fill="#e7f4f0">live path: mic, remote audio, oai-events</text>
+              <text x="226" y="390" font-family="ui-monospace, monospace" font-size="11" fill="#9eb9b5">BFF off path · secret unused · many turns</text>
+              <path d="M820 442H170" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="360" y="434" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">response.done → UI idle (call still open)</text>
+              <g fill="#1d2927" stroke="#63827d"><rect x="209" y="470" width="570" height="44" rx="4"/></g>
+              <text x="226" y="497" font-family="ui-monospace, monospace" font-size="11" fill="#e7f4f0">call ends only on disconnect or peer closed / disconnected / failed</text>
+            </svg>
+          </div>
+          <p class="diagram-note">Steps 1 through 4 mint the secret. Steps 5 and 6 open the WebRTC call. Step 7 is the live duplex path. Step 8 is a turn ending, not hangup. Step 9 is teardown. The architecture note adds the renderer clock and the 20,000 ms local connect timeout.</p>
+          <ul class="legend" aria-label="Diagram legend"><li><i></i>Local application hop</li><li><i class="variable"></i>Provider or network hop with variable timing</li></ul>
+        </section>
+
+        <section id="secret" aria-labelledby="secret-title">
+          <p class="label">Ephemeral client secret</p>
+          <h2 id="secret-title">How the secret is used</h2>
+          <p class="section-intro">The BFF holds <code>OPENAI_API_KEY</code>. The browser never sees that key. It sees only a short-lived client secret, and it uses that secret once. The timing diagram above is the same handoff drawn as a sequence.</p>
+          <div class="sequence" aria-label="Secret handoff sequence">
+            <article>
+              <time>01 · mint</time>
+              <div><strong>The BFF mints with the long-lived key.</strong><br><code class="path" data-source="server/src/providers/openai-session.ts">openai-session.ts</code> posts to <code>https://api.openai.com/v1/realtime/client_secrets</code> with <code>Authorization: Bearer</code> set to <code>OPENAI_API_KEY</code>. The response includes a <code>value</code> field (an <code>ek_*</code> token) and may include <code>expires_at</code>.</div>
+            </article>
+            <article>
+              <time>02 · connect</time>
+              <div><strong>The browser spends the secret once.</strong><br><code class="path" data-source="packages/core/src/transport/openai.ts">OpenAIRealtimeTransport</code> posts an SDP offer to <code>https://api.openai.com/v1/realtime/calls</code> with <code>Authorization: Bearer</code> set to that <code>value</code>. That is the only browser use of the ephemeral secret.</div>
+            </article>
+            <article>
+              <time>03 · live path</time>
+              <div><strong>After the handshake, the secret is unused.</strong><br>Mic audio, remote audio, and <code>oai-events</code> travel browser to OpenAI over WebRTC. The BFF is off the live path. It does not relay turns, tool calls, or transcript text.</div>
+            </article>
+          </div>
+          <p class="warning" style="margin-top:20px"><strong>Connect-time gate only.</strong> <code>parseEphemeralSession</code> rejects an already-expired <code>expires_at</code> when it parses the mint response. That check does not close a call that is already connected.</p>
+        </section>
+
+        <section id="call-ends" aria-labelledby="call-title">
+          <p class="label">Live call lifetime</p>
+          <h2 id="call-title">When the live call ends</h2>
+          <p class="section-intro">The live Realtime call ends when the peer connection tears down. It does not end when a single answer finishes.</p>
+          <div class="grid two" style="margin-top:22px">
+            <article class="card">
+              <h3>What ends the call</h3>
+              <p>An explicit <code>disconnect()</code> in <code class="path" data-source="packages/core/src/transport/openai.ts">OpenAIRealtimeTransport</code> closes the data channel, closes the peer connection, and stops local tracks. After the call has connected, a peer connection that becomes <code>closed</code>, <code>disconnected</code>, or <code>failed</code> also tears down and emits <code>disconnected</code>.</p>
+            </article>
+            <article class="card">
+              <h3>What does not end the call</h3>
+              <p><code>response.done</code> only returns the UI state machine to <code>idle</code>. <code>expires_at</code> is a connect-time gate after parse. Neither event closes an established WebRTC call by itself.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="budget" aria-labelledby="budget-title">
+          <p class="label">BFF limits</p>
+          <h2 id="budget-title">Session budget caps minting, not call length</h2>
+          <p class="section-intro"><code class="path" data-source="server/src/routes/session.ts">session.ts</code> applies a per-origin session budget before it asks OpenAI for a client secret. That budget limits how often an origin may mint. It does not limit how long a live WebRTC call may stay open once the secret is spent.</p>
+          <p class="companion">For the full boundary map, renderer timing, and module ownership, read <a href="architecture.html">Jarvis architecture</a>.</p>
+        </section>
+      </main>
+    </div>
+    <footer>Companion explanation to the <a href="architecture.html">architecture note</a>. Source-backed. Prefer the architecture page for system shape and timing constants.</footer>
+  </div>
+  <script>
+    const links = [...document.querySelectorAll('nav a')];
+    const sections = links.map((link) => document.querySelector(link.hash)).filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      for (const link of links) link.removeAttribute('aria-current');
+      document.querySelector(`nav a[href="#${visible.target.id}"]`)?.setAttribute('aria-current', 'true');
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0, .2, .6] });
+    sections.forEach((section) => observer.observe(section));
+  </script>
+</body>
+</html>
