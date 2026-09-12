@@ -35,7 +35,6 @@ describe("VoiceDemoTransport", () => {
     transport.submitToolResult({
       callId: call.callId,
       output: JSON.stringify({ ok: true, message: "Opened the article and scrolled down." }),
-      followUp: "brief-acknowledgement",
     });
     await vi.advanceTimersByTimeAsync(400);
     expect(events.some((event) => event.type === "agent-text-done" && event.text === "Opened the article and scrolled down.")).toBe(true);
@@ -77,7 +76,7 @@ describe("VoiceDemoTransport", () => {
     transport.disconnect();
   });
 
-  it("does not start a spoken follow-up for none", async () => {
+  it("stays silent for a cancelled result", async () => {
     vi.useFakeTimers();
     const transport = new VoiceDemoTransport();
     const events: NormalizedRealtimeEvent[] = [];
@@ -89,14 +88,13 @@ describe("VoiceDemoTransport", () => {
     transport.submitToolResult({
       callId: call.callId,
       output: JSON.stringify({ ok: false, code: "cancelled", message: "The UI command was cancelled." }),
-      followUp: "none",
     });
     await vi.advanceTimersByTimeAsync(400);
     expect(events.some((event) => event.type === "agent-audio-started")).toBe(false);
     transport.disconnect();
   });
 
-  it("speaks the result message for a brief acknowledgement", async () => {
+  it("speaks the result message for a success", async () => {
     vi.useFakeTimers();
     const transport = new VoiceDemoTransport();
     const events: NormalizedRealtimeEvent[] = [];
@@ -108,14 +106,13 @@ describe("VoiceDemoTransport", () => {
     transport.submitToolResult({
       callId: call.callId,
       output: JSON.stringify({ ok: true, message: "Opened the library." }),
-      followUp: "brief-acknowledgement",
     });
     await vi.advanceTimersByTimeAsync(400);
     expect(events.some((event) => event.type === "agent-text-done" && event.text === "Opened the library.")).toBe(true);
     transport.disconnect();
   });
 
-  it("speaks a failure line for a default follow-up", async () => {
+  it("speaks the failure message for a failed result", async () => {
     vi.useFakeTimers();
     const transport = new VoiceDemoTransport();
     const events: NormalizedRealtimeEvent[] = [];
@@ -127,7 +124,6 @@ describe("VoiceDemoTransport", () => {
     transport.submitToolResult({
       callId: call.callId,
       output: JSON.stringify({ ok: false, code: "execution_failed", message: "The UI command failed." }),
-      followUp: "default",
     });
     await vi.advanceTimersByTimeAsync(400);
     expect(events.some((event) => event.type === "agent-text-done" && event.text === "The UI command failed.")).toBe(true);

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceViz } from "../voice-viz.js";
 import { createIdleFeatures } from "../audio/idle-features.js";
 import type { VoiceFeatureSource } from "../audio/types.js";
-import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolFollowUpIntent, RealtimeToolResult, RealtimeTransport } from "../transport/types.js";
+import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "../transport/types.js";
 
 class FakeTransport implements RealtimeTransport {
   connected = false;
@@ -11,8 +11,10 @@ class FakeTransport implements RealtimeTransport {
   listeners = new Set<RealtimeEventListener>();
   disconnect = vi.fn(() => { this.connected = false; this.emit({ type: "disconnected" }); });
   lastConnection: { endpoint: string; preferences: RealtimeSessionPreferences | undefined } | undefined;
+  connectHook: (() => Promise<void>) | undefined;
   async connect(endpoint: string, preferences?: RealtimeSessionPreferences): Promise<void> {
     this.lastConnection = { endpoint, preferences };
+    if (this.connectHook) return this.connectHook();
     this.connected = true;
     this.emit({ type: "connected" });
   }
@@ -46,6 +48,141 @@ describe("VoiceViz integration", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it("preserves overlapping Live captions without interrupting speech or completing a turn", async () => {
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    transport.emit({ type: "agent-audio-started" });
+    transport.emit({ type: "live-caption", role: "agent", delta: "Hello", startMs: 0, endMs: 200 });
+    transport.emit({ type: "live-caption", role: "user", delta: "Wait", startMs: 100, endMs: 250 });
+    transport.emit({ type: "live-caption", role: "agent", delta: " there", startMs: 200, endMs: 500 });
+    expect(viz.state).toBe("speaking");
+    expect(viz.transcript.getSnapshot().messages.map((row) => row.text)).toEqual(["Hello there", "Wait"]);
+    const usage = vi.fn();
+    viz.on("usage", usage);
+    transport.emit({ type: "session-usage", seconds: 4, final: true, reason: "close_requested" });
+    expect(usage).toHaveBeenCalledWith({ seconds: 4, final: true, reason: "close_requested" });
+    viz.unmount();
+  });
+
+  it("partitions reset caption timestamps only after the next transport connects", async () => {
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    transport.emit({ type: "live-caption", role: "agent", delta: "Old", startMs: 0, endMs: 100 });
+
+    let finishConnect = () => undefined;
+    transport.connectHook = () => new Promise<void>((resolve) => {
+      finishConnect = () => {
+        transport.connected = true;
+        transport.emit({ type: "connected" });
+        resolve();
+      };
+    });
+    const reconnecting = viz.connect("/session");
+    transport.emit({ type: "live-caption", role: "agent", delta: " late", startMs: 100, endMs: 200 });
+    finishConnect();
+    await reconnecting;
+    transport.emit({ type: "live-caption", role: "agent", delta: "New", startMs: 0, endMs: 100 });
+
+    expect(viz.transcript.getSnapshot().messages.map((message) => message.text)).toEqual(["Old late", "New"]);
+    viz.unmount();
+  });
+
+  it("finishes local cleanup before a disconnected listener reconnects", async () => {
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    transport.emit({ type: "live-caption", role: "agent", delta: "Old", startMs: 0, endMs: 100 });
+    const stopReconnect = viz.on("disconnected", () => {
+      void viz.connect("/session");
+      transport.emit({ type: "live-caption", role: "agent", delta: "New", startMs: 0, endMs: 100 });
+    });
+
+    transport.emit({ type: "disconnected" });
+
+    expect(viz.transcript.getSnapshot().messages.map(({ text, status }) => [text, status])).toEqual([
+      ["Old", "interrupted"], ["New", "streaming"],
+    ]);
+    stopReconnect();
+    viz.unmount();
+  });
+
+  it("surfaces a rejected command without changing state or transcript", async () => {
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    transport.emit({ type: "live-caption", role: "agent", delta: "Hello", startMs: 0, endMs: 100 });
+    const state = viz.state;
+    const providerError = vi.fn();
+    viz.on("providererror", providerError);
+
+    transport.emit({ type: "provider-error", message: "Unknown parameter", code: "unknown_parameter", clientEventId: "evt_1" });
+
+    expect(providerError).toHaveBeenCalledWith({ message: "Unknown parameter", code: "unknown_parameter", clientEventId: "evt_1" });
+    expect(viz.state).toBe(state);
+    expect(viz.transcript.getSnapshot().messages.map(({ text, status }) => [text, status])).toEqual([["Hello", "streaming"]]);
+    viz.unmount();
+  });
+
+  it("reports a failed backend response to the host without changing state", async () => {
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    const state = viz.state;
+    const backendFailed = vi.fn();
+    viz.on("backendfailed", backendFailed);
+
+    transport.emit({ type: "backend-failed", delegationId: "delegation_1", responseId: "resp_1", status: "failed" });
+
+    expect(backendFailed).toHaveBeenCalledWith({ delegationId: "delegation_1", responseId: "resp_1", status: "failed" });
+    expect(viz.state).toBe(state);
+    viz.unmount();
+  });
+
+  it("completes the last Live caption row when a continuous session disconnects", async () => {
+    vi.stubGlobal("AudioContext", class {
+      state = "running";
+      sampleRate = 48_000;
+      destination = {};
+      createAnalyser() { return { fftSize: 2048, smoothingTimeConstant: 0, frequencyBinCount: 1024, connect() {}, disconnect() {} }; }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      async resume() {}
+      async close() {}
+    });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockReturnValue(undefined);
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    transport.emit({ type: "agent-track", stream: {} as MediaStream, track: { kind: "audio" } as MediaStreamTrack, continuous: true });
+    transport.emit({ type: "live-caption", role: "agent", delta: "Hello", startMs: 0, endMs: 100 });
+
+    transport.emit({ type: "disconnected" });
+
+    expect(viz.transcript.getSnapshot().messages.map(({ text, status }) => [text, status])).toEqual([["Hello", "complete"]]);
+    viz.unmount();
+  });
+
+  it("keeps an error state after transport cleanup", async () => {
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+
+    transport.emit({ type: "error", error: new Error("network lost") });
+    transport.emit({ type: "disconnected" });
+
+    expect(viz.state).toBe("error");
+    viz.unmount();
+  });
 
   it("maps transport events to state and transcript, then cleans up", async () => {
     const mount = document.createElement("div");
@@ -127,26 +264,10 @@ describe("VoiceViz integration", () => {
     expect(viz.transcript.getSnapshot().messages).toHaveLength(0);
     transport.emit({ type: "response-done" });
     expect(viz.state).toBe("idle");
-    const result: RealtimeToolResult = { callId: "call_ui", output: "{\"ok\":true}", followUp: "default" };
+    const result: RealtimeToolResult = { callId: "call_ui", output: "{\"ok\":true}" };
     viz.submitToolResult(result);
     expect(transport.submitToolResult).toHaveBeenCalledOnce();
     expect(transport.submitToolResult).toHaveBeenCalledWith(result);
-    viz.unmount();
-  });
-
-  it("forwards each follow-up intent to the transport unchanged", () => {
-    const mount = document.createElement("div");
-    const transport = new FakeTransport();
-    const viz = new VoiceViz({ transport, reducedMotion: true });
-    viz.mount(mount);
-
-    const intents: RealtimeToolFollowUpIntent[] = ["default", "brief-acknowledgement", "none"];
-    for (const followUp of intents) {
-      const result: RealtimeToolResult = { callId: "call_ui", output: "{\"ok\":true}", followUp };
-      viz.submitToolResult(result);
-      expect(transport.submitToolResult).toHaveBeenLastCalledWith(result);
-    }
-    expect(transport.submitToolResult).toHaveBeenCalledTimes(intents.length);
     viz.unmount();
   });
 });

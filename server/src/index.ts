@@ -5,6 +5,7 @@ export function createServer(config = readConfig()) {
   const sessionRoute = createSessionRoute({ config });
   return Bun.serve({
     port: config.port,
+    idleTimeout: 30,
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, runtime: "bun" });

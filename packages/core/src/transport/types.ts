@@ -1,8 +1,3 @@
-export interface EphemeralSession {
-  value: string;
-  expiresAt?: number;
-}
-
 export type ResponseTiming = "fast" | "natural" | "patient";
 
 export interface RealtimeSessionPreferences {
@@ -16,21 +11,15 @@ export interface RealtimeToolCall {
   argumentsJson: string;
 }
 
-/**
- * Semantic follow-up after a tool result.
- * `default` requests a normal explanatory follow-up.
- * `brief-acknowledgement` requests a short success acknowledgement.
- * `none` submits the output and does not request a follow-up.
- */
-export type RealtimeToolFollowUpIntent = "default" | "brief-acknowledgement" | "none";
-
 export interface RealtimeToolResult {
   callId: string;
   output: string;
-  followUp: RealtimeToolFollowUpIntent;
 }
 
 export type NormalizedRealtimeEvent =
+  | { type: "live-caption"; role: "user" | "agent"; delta: string; startMs: number; endMs: number }
+  | { type: "backend-usage"; delegationId: string; responseId: string; inputTokens: number; outputTokens: number; totalTokens: number }
+  | { type: "session-usage"; seconds: number; final: boolean; reason: string | undefined }
   | { type: "connected" }
   | { type: "disconnected" }
   | { type: "user-speech-started" }
@@ -41,8 +30,10 @@ export type NormalizedRealtimeEvent =
   | { type: "agent-text-delta"; delta: string; audioSynchronized?: boolean }
   | { type: "agent-text-done"; text?: string; audioSynchronized?: boolean }
   | { type: "response-done" }
-  | { type: "agent-track"; stream: MediaStream; track: MediaStreamTrack }
+  | { type: "agent-track"; stream: MediaStream; track: MediaStreamTrack; continuous?: boolean }
   | { type: "tool-call"; call: RealtimeToolCall }
+  | { type: "provider-error"; message: string; code: string | undefined; clientEventId: string | undefined }
+  | { type: "backend-failed"; delegationId: string; responseId: string; status: "failed" | "incomplete" | "cancelled" }
   | { type: "error"; error: Error };
 
 export type RealtimeEventListener = (event: NormalizedRealtimeEvent) => void;
@@ -51,7 +42,7 @@ export interface RealtimeTransport {
   readonly connected: boolean;
   readonly agentAudio: MediaStreamTrack | null;
   connect(tokenEndpoint: string, preferences?: RealtimeSessionPreferences): Promise<void>;
-  disconnect(): void;
+  disconnect(): void | Promise<void>;
   subscribe(listener: RealtimeEventListener): () => void;
   submitToolResult(result: RealtimeToolResult): void;
 }

@@ -5,11 +5,11 @@ import { DemoTransport, DemoVoiceFeatureSource } from "./demo-transport.js";
 
 const PRESETS: PresetName[] = ["bars", "waveform", "ring", "particles", "hud"];
 const RESPONSE_TIMINGS: ReadonlyArray<{ value: ResponseTiming; label: string; detail: string }> = [
-  { value: "fast", label: "Fast", detail: "Eager turn detection, minimal reasoning, low transcript delay." },
-  { value: "natural", label: "Natural", detail: "Balanced turn detection, low reasoning, medium transcript delay." },
-  { value: "patient", label: "Patient", detail: "Longer turn detection, medium reasoning, high transcript delay." },
+  { value: "fast", label: "Fast", detail: "Prompt for a quick conversational pace." },
+  { value: "natural", label: "Natural", detail: "Prompt for a natural conversational pace." },
+  { value: "patient", label: "Patient", detail: "Prompt to leave more time for the user to finish." },
 ];
-type ConnectionPhase = "disconnected" | "connecting" | "connected";
+type ConnectionPhase = "disconnected" | "connecting" | "connected" | "closing";
 
 interface StageProps {
   label: string;
@@ -47,7 +47,7 @@ export function App() {
   const timingDetail = RESPONSE_TIMINGS.find(({ value }) => value === responseTiming)?.detail ?? RESPONSE_TIMINGS[1]!.detail;
 
   useEffect(() => {
-    const transcriptUnsubscribes: Array<() => void> = [];
+    const unsubscribes: Array<() => void> = [];
     const active = hosts.current.flatMap((host, index) => {
       if (!host) return [];
       const useLiveTransport = mode === "live" && index === 1;
@@ -60,24 +60,31 @@ export function App() {
         panelPlacement: placement,
       });
       viz.mount(host);
-      viz.on("statechange", ({ state }) => { if (index === 1) setStatus(state); });
-      viz.on("error", ({ error }) => {
+      unsubscribes.push(viz.on("statechange", ({ state }) => { if (index === 1) setStatus(state); }));
+      unsubscribes.push(viz.on("disconnected", () => {
+        if (index !== 1) return;
+        setConnectionPhase("disconnected");
+        if (viz.state !== "error") setStatus("Disconnected");
+      }));
+      unsubscribes.push(viz.on("error", ({ error }) => {
         if (index !== 1) return;
         connectionAttempt.current += 1;
         setConnectionPhase("disconnected");
         setStatus(error.message);
-      });
+      }));
+      unsubscribes.push(viz.on("backendfailed", ({ status }) => { if (index === 1) setStatus(`Backend response ${status}`); }));
+      unsubscribes.push(viz.on("providererror", ({ message }) => { if (index === 1) setStatus(message); }));
       if (index === 1) {
         setTranscriptStore(viz.transcript);
         setMessages(viz.transcript.getSnapshot().messages);
-        transcriptUnsubscribes.push(viz.transcript.subscribe((snapshot) => setMessages(snapshot.messages)));
+        unsubscribes.push(viz.transcript.subscribe((snapshot) => setMessages(snapshot.messages)));
       }
       if (!useLiveTransport) void viz.connect("demo");
       return [viz];
     });
     instances.current = active;
     return () => {
-      for (const unsubscribe of transcriptUnsubscribes) unsubscribe();
+      for (const unsubscribe of unsubscribes) unsubscribe();
       for (const instance of active) instance.unmount();
       instances.current = [];
     };
@@ -88,10 +95,6 @@ export function App() {
   useEffect(() => { for (const instance of instances.current) instance.setPresets(presets); }, [presets]);
 
   const togglePreset = (preset: PresetName) => setPresets((current) => current.includes(preset) ? current.filter((value) => value !== preset) : [...current, preset]);
-  const changeSpeechRate = (nextRate: number) => {
-    setSpeechRate(nextRate);
-    instances.current[1]?.setTranscriptPace(nextRate);
-  };
   const selectMode = (nextMode: "simulation" | "live") => {
     if (nextMode === mode) return;
     connectionAttempt.current += 1;
@@ -101,17 +104,16 @@ export function App() {
   };
   const toggleLiveConnection = async () => {
     const primary = instances.current[1];
-    if (!primary || connectionPhase === "connecting") return;
+    if (!primary || (connectionPhase === "connecting" || connectionPhase === "closing")) return;
     if (connectionPhase === "connected" || primary.connected) {
       connectionAttempt.current += 1;
-      primary.disconnect();
-      setConnectionPhase("disconnected");
-      setStatus("Disconnected");
+      setConnectionPhase("closing");
+      setStatus("Finishing conversation");
+      await primary.disconnect();
       return;
     }
 
     const attempt = ++connectionAttempt.current;
-    primary.setTranscriptPace(speechRate);
     setConnectionPhase("connecting");
     setStatus("Connecting");
     try {
@@ -158,7 +160,7 @@ export function App() {
             <label className="session-field endpoint-field">
               <span className="field-title">Bun session endpoint</span>
               <input value={endpoint} disabled={settingsLocked} onChange={(event) => setEndpoint(event.currentTarget.value)} />
-              <span className="field-help">Server-minted ephemeral session</span>
+              <span className="field-help">GPT Live-1 session</span>
             </label>
 
             <fieldset className="session-field timing-field" disabled={settingsLocked}>
@@ -182,7 +184,7 @@ export function App() {
 
             <label className="session-field speech-rate-field">
               <span className="rate-heading">
-                <span className="field-title">Speech speed</span>
+                <span className="field-title">Speaking pace</span>
                 <output htmlFor="speech-rate">{speechRate.toFixed(2)}×</output>
               </span>
               <input
@@ -194,10 +196,10 @@ export function App() {
                 value={speechRate}
                 disabled={settingsLocked}
                 aria-describedby="speech-rate-help"
-                onInput={(event) => changeSpeechRate(event.currentTarget.valueAsNumber)}
+                onInput={(event) => setSpeechRate(event.currentTarget.valueAsNumber)}
               />
               <span className="rate-scale" aria-hidden="true"><span>Measured</span><span>Brisk</span></span>
-              <span className="field-help" id="speech-rate-help">The agent transcript follows this rate.</span>
+              <span className="field-help" id="speech-rate-help">Guides the voice prompt; actual speaking pace can vary.</span>
             </label>
           </div>
 
@@ -206,11 +208,11 @@ export function App() {
             <button
               className="connect"
               data-connected={connectionPhase === "connected"}
-              disabled={connectionPhase === "connecting"}
+              disabled={connectionPhase === "connecting" || connectionPhase === "closing"}
               aria-pressed={connectionPhase === "connected"}
               onClick={toggleLiveConnection}
             >
-              {connectionPhase === "connecting" ? "Connecting…" : connectionPhase === "connected" ? "Disconnect primary" : "Connect primary"}
+              {connectionPhase === "closing" ? "Finishing…" : connectionPhase === "connecting" ? "Connecting…" : connectionPhase === "connected" ? "Disconnect primary" : "Connect primary"}
             </button>
           </footer>
         </section>

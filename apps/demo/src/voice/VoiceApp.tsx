@@ -10,7 +10,7 @@ import { NavigationCapability, RoutePage, sendTyped, type LibraryItem, type Them
 import { VOICE_DEMO_SCRIPTS, VoiceDemoTransport } from "./voice-demo-transport.js";
 import { DemoVoiceFeatureSource } from "../demo-transport.js";
 
-type ConnectionPhase = "disconnected" | "connecting" | "connected";
+type ConnectionPhase = "disconnected" | "connecting" | "connected" | "closing";
 const RESPONSE_TIMINGS: ReadonlyArray<{ value: ResponseTiming; label: string }> = [
   { value: "fast", label: "Fast" },
   { value: "natural", label: "Natural" },
@@ -90,9 +90,14 @@ export function VoiceApp() {
     const unsubState = viz.on("statechange", ({ state }) => {
       setStatus(state);
       const snapshot = actor.getSnapshot();
-      if (state === "listening" && (snapshot.matches("validating") || snapshot.matches("executing"))) {
+      if (mode === "simulation" && state === "listening" && (snapshot.matches("validating") || snapshot.matches("executing"))) {
         actor.send({ type: "VOICE_INTERRUPTED" });
       }
+    });
+    const unsubDisconnect = viz.on("disconnected", () => {
+      setConnectionPhase("disconnected");
+      if (viz.state !== "error") setStatus("Disconnected");
+      actor.send({ type: "SESSION_DISCONNECTED" });
     });
     const unsubError = viz.on("error", ({ error }) => {
       connectionAttempt.current += 1;
@@ -101,11 +106,16 @@ export function VoiceApp() {
       setLiveMessage(error.message);
       actor.send({ type: "SESSION_DISCONNECTED" });
     });
+    const unsubBackendFailed = viz.on("backendfailed", ({ status }) => { setStatus(`Backend response ${status}`); });
+    const unsubProviderError = viz.on("providererror", ({ message }) => { setStatus(message); });
     if (transport) void viz.connect("demo");
     return () => {
       unsubTool();
       unsubState();
       unsubError();
+      unsubDisconnect();
+      unsubBackendFailed();
+      unsubProviderError();
       viz.unmount();
       vizRef.current = undefined;
       demoTransportRef.current = undefined;
@@ -123,17 +133,15 @@ export function VoiceApp() {
 
   const toggleLiveConnection = async () => {
     const viz = vizRef.current;
-    if (!viz || connectionPhase === "connecting" || activity.voiceBusy) return;
+    if (!viz || (connectionPhase === "connecting" || connectionPhase === "closing") || activity.voiceBusy) return;
     if (connectionPhase === "connected" || viz.connected) {
       connectionAttempt.current += 1;
-      viz.disconnect();
-      setConnectionPhase("disconnected");
-      setStatus("Disconnected");
-      actor.send({ type: "SESSION_DISCONNECTED" });
+      setConnectionPhase("closing");
+      setStatus("Finishing conversation");
+      await viz.disconnect();
       return;
     }
     const attempt = ++connectionAttempt.current;
-    viz.setTranscriptPace(speechRate);
     setConnectionPhase("connecting");
     setStatus("Connecting");
     try {
@@ -207,7 +215,7 @@ export function VoiceApp() {
             </select>
           </label>
           <label>
-            Speech speed
+            Speaking pace
             <input
               type="range"
               min="0.75"
@@ -218,12 +226,11 @@ export function VoiceApp() {
               onInput={(event) => {
                 const next = event.currentTarget.valueAsNumber;
                 setSpeechRate(next);
-                vizRef.current?.setTranscriptPace(next);
               }}
             />
           </label>
-          <button type="button" disabled={connectionPhase === "connecting" || activity.voiceBusy} onClick={() => void toggleLiveConnection()}>
-            {connectionPhase === "connecting" ? "Connecting…" : connectionPhase === "connected" ? "Disconnect" : "Connect"}
+          <button type="button" disabled={(connectionPhase === "connecting" || connectionPhase === "closing") || activity.voiceBusy} onClick={() => void toggleLiveConnection()}>
+            {connectionPhase === "closing" ? "Finishing…" : connectionPhase === "connecting" ? "Connecting…" : connectionPhase === "connected" ? "Disconnect" : "Connect"}
           </button>
         </section>
       )}

@@ -1,285 +1,340 @@
-import type { EphemeralSession, NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolFollowUpIntent, RealtimeToolResult, RealtimeTransport } from "./types.js";
+import { LiveToolBatches, normalizeOpenAIEvent, record } from "./live-events.js";
+import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolResult, RealtimeTransport } from "./types.js";
+export { normalizeOpenAIEvent } from "./live-events.js";
 
-type ProviderEvent = Record<string, unknown> & { type?: string };
-
-const BRIEF_ACKNOWLEDGEMENT_INSTRUCTIONS = [
-  "Speak the successful result first in one short sentence.",
-  "Do not mention internal action names, target IDs, JSON, or action counts.",
-  "Do not call any tools.",
-].join(" ");
-
-function followUpCreateEvent(intent: RealtimeToolFollowUpIntent): ProviderEvent | undefined {
-  switch (intent) {
-    case "none":
-      return undefined;
-    case "default":
-      return { type: "response.create" };
-    case "brief-acknowledgement":
-      return {
-        type: "response.create",
-        response: {
-          tools: [],
-          tool_choice: "none",
-          max_output_tokens: 64,
-          instructions: BRIEF_ACKNOWLEDGEMENT_INSTRUCTIONS,
-        },
-      };
-    default: {
-      const _exhaustive: never = intent;
-      return _exhaustive;
-    }
-  }
+export function parseLiveSession(value: unknown): { id: string; sdp: string } {
+  const payload = record(value);
+  const session = record(payload?.session);
+  const transport = record(payload?.transport);
+  if (typeof session?.id !== "string" || !session.id.trim() || transport?.type !== "webrtc"
+    || typeof transport.sdp !== "string" || !transport.sdp.trim()) throw new Error("Session endpoint returned an invalid Live session");
+  return { id: session.id, sdp: transport.sdp };
 }
 
-function stringField(event: ProviderEvent, key: string): string | undefined {
-  const value = event[key];
-  return typeof value === "string" ? value : undefined;
+function waitForIce(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {
+  if (peer.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      peer.removeEventListener("icegatheringstatechange", check);
+      signal.removeEventListener("abort", abort);
+    };
+    const check = () => { if (peer.iceGatheringState === "complete") { cleanup(); resolve(); } };
+    const abort = () => { cleanup(); reject(new Error("Live connection cancelled")); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("ICE gathering timed out")); }, 10_000);
+    peer.addEventListener("icegatheringstatechange", check);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    else check();
+  });
 }
 
-export function normalizeOpenAIEvent(event: ProviderEvent): NormalizedRealtimeEvent[] {
-  switch (event.type) {
-    case "input_audio_buffer.speech_started":
-      return [{ type: "user-speech-started" }];
-    case "input_audio_buffer.speech_stopped":
-      return [{ type: "user-speech-stopped" }];
-    case "conversation.item.input_audio_transcription.completed": {
-      const text = stringField(event, "transcript") ?? stringField(event, "text");
-      return text ? [{ type: "user-text", text }] : [];
-    }
-    case "response.output_audio.started":
-    case "response.audio.started":
-      return [{ type: "agent-audio-started" }];
-    case "response.output_audio.done":
-    case "response.audio.done":
-      return [];
-    case "response.output_audio.delta":
-    case "response.audio.delta":
-      return [{ type: "agent-audio-started" }];
-    case "response.output_audio_transcript.delta":
-    case "response.audio_transcript.delta": {
-      const delta = stringField(event, "delta");
-      return delta ? [{ type: "agent-audio-started" }, { type: "agent-text-delta", delta, audioSynchronized: true }] : [];
-    }
-    case "response.output_text.delta":
-    case "response.text.delta": {
-      const delta = stringField(event, "delta");
-      return delta ? [{ type: "agent-text-delta", delta }] : [];
-    }
-    case "response.output_audio_transcript.done":
-    case "response.audio_transcript.done": {
-      const text = stringField(event, "transcript") ?? stringField(event, "text");
-      return text ? [{ type: "agent-text-done", text, audioSynchronized: true }] : [{ type: "agent-text-done", audioSynchronized: true }];
-    }
-    case "response.output_text.done":
-    case "response.text.done": {
-      const text = stringField(event, "transcript") ?? stringField(event, "text");
-      return text ? [{ type: "agent-text-done", text }] : [{ type: "agent-text-done" }];
-    }
-    case "response.done":
-      return [{ type: "response-done" }, { type: "agent-audio-stopped" }];
-    case "response.function_call_arguments.done": {
-      const callId = stringField(event, "call_id");
-      const name = stringField(event, "name");
-      const argumentsJson = stringField(event, "arguments");
-      if (!callId || !name || argumentsJson === undefined) return [];
-      return [{ type: "tool-call", call: { callId, name, argumentsJson } }];
-    }
-    case "error": {
-      const providerError = event.error;
-      const message = typeof providerError === "object" && providerError && "message" in providerError
-        ? String(providerError.message)
-        : stringField(event, "message") ?? "Realtime provider error";
-      return [{ type: "error", error: new Error(message) }];
-    }
-    default:
-      return [];
-  }
+type LiveSessionPhase = "starting" | "active" | "closing" | "closed";
+
+interface LiveSession {
+  phase: LiveSessionPhase;
+  peer: RTCPeerConnection;
+  abort: AbortController;
+  tools: LiveToolBatches;
+  startup: Promise<void>;
+  resolveStartup: () => void;
+  rejectStartup: (error: Error) => void;
+  channel: RTCDataChannel | undefined;
+  microphone: MediaStream | undefined;
+  agentAudio: MediaStreamTrack | null;
+  startupTimer: ReturnType<typeof setTimeout> | undefined;
+  closeTimer: ReturnType<typeof setTimeout> | undefined;
+  leaseDeadline: ReturnType<typeof setTimeout> | undefined;
+  closing: Promise<void> | undefined;
+  finishClose: (() => void) | undefined;
 }
 
-export function parseEphemeralSession(value: unknown, now = Date.now()): EphemeralSession {
-  if (!value || typeof value !== "object") throw new Error("Session endpoint returned an invalid payload");
-  const payload = value as Record<string, unknown>;
-  const nested = payload.client_secret && typeof payload.client_secret === "object" ? payload.client_secret as Record<string, unknown> : undefined;
-  const token = typeof payload.value === "string" ? payload.value : typeof nested?.value === "string" ? nested.value : undefined;
-  if (!token) throw new Error("Session endpoint did not return an ephemeral client secret");
-  const expires = typeof payload.expires_at === "number" ? payload.expires_at : typeof nested?.expires_at === "number" ? nested.expires_at : undefined;
-  if (expires !== undefined && expires <= Math.floor(now / 1_000)) throw new Error("Session endpoint returned an expired client secret");
-  return expires === undefined ? { value: token } : { value: token, expiresAt: expires };
-}
-
-export class OpenAIRealtimeTransport implements RealtimeTransport {
-  #peer: RTCPeerConnection | undefined;
-  #dataChannel: RTCDataChannel | undefined;
-  #localStream: MediaStream | undefined;
+export class OpenAILiveTransport implements RealtimeTransport {
+  #session: LiveSession | undefined;
+  #connectRequest: object | undefined;
   #listeners = new Set<RealtimeEventListener>();
-  #connected = false;
-  #audioStarted = false;
-  #agentAudio: MediaStreamTrack | null = null;
 
-  get connected(): boolean {
-    return this.#connected;
-  }
+  get connected(): boolean { return this.#session?.phase === "active"; }
+  get agentAudio(): MediaStreamTrack | null { return this.#session?.agentAudio ?? null; }
 
-  get agentAudio(): MediaStreamTrack | null {
-    return this.#agentAudio;
-  }
+  #live(session: LiveSession): boolean { return this.#session === session; }
 
   subscribe(listener: RealtimeEventListener): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
 
-  async connect(tokenEndpoint: string, preferences: RealtimeSessionPreferences = {}): Promise<void> {
-    if (this.#peer) this.disconnect();
+  async connect(sessionEndpoint: string, preferences: RealtimeSessionPreferences = {}): Promise<void> {
+    const request = {};
+    this.#connectRequest = request;
+    const previous = this.#session;
+    if (previous) await this.#close(previous);
+    if (this.#connectRequest !== request) throw new Error("Live connection cancelled");
+
+    const session = this.#createSession();
+    this.#session = session;
+    const requested = () => this.#live(session) && this.#connectRequest === request;
+    const ensureRequested = () => { if (!requested()) throw new Error("Live connection cancelled"); };
+    const lost = () => {
+      if (!this.#live(session)) return;
+      this.#terminate(session, new Error("Live connection lost; final session usage is unconfirmed"), session.phase !== "starting");
+    };
+    const listenerOptions = { signal: session.abort.signal };
     try {
-      const tokenResponse = await fetch(tokenEndpoint, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify(preferences),
-      });
-      if (!tokenResponse.ok) throw new Error(`Session endpoint failed with ${tokenResponse.status}`);
-      const session = parseEphemeralSession(await tokenResponse.json());
-
-      const peer = new RTCPeerConnection();
-      this.#peer = peer;
-      let resolveConnection: (() => void) | undefined;
-      let rejectConnection: ((error: Error) => void) | undefined;
-      const connectionReady = new Promise<void>((resolve, reject) => {
-        resolveConnection = resolve;
-        rejectConnection = reject;
-      });
-      void connectionReady.catch(() => undefined);
-      const markConnected = () => {
-        if (this.#peer !== peer || this.#connected) return;
-        this.#connected = true;
-        this.#emit({ type: "connected" });
-        resolveConnection?.();
-      };
-      const rejectBeforeConnected = (state: string) => {
-        if (this.#peer !== peer || this.#connected) return;
-        rejectConnection?.(new Error(`Realtime peer connection ${state}`));
-      };
-      peer.addEventListener("connectionstatechange", () => {
-        if (this.#peer !== peer) return;
-        if (peer.connectionState === "connected") {
-          markConnected();
-        } else if (["closed", "disconnected", "failed"].includes(peer.connectionState)) {
-          if (!this.#connected) {
-            rejectBeforeConnected(peer.connectionState);
-            return;
-          }
-          const hadResources = this.#teardown();
-          if (!hadResources) return;
-          this.#emit({ type: "disconnected" });
-        }
-      });
-      peer.addEventListener("iceconnectionstatechange", () => {
-        if (["connected", "completed"].includes(peer.iceConnectionState)) markConnected();
-        else if (["closed", "disconnected", "failed"].includes(peer.iceConnectionState)) rejectBeforeConnected(`ICE ${peer.iceConnectionState}`);
-      });
-      peer.addEventListener("track", ({ track, streams }) => {
-        this.#agentAudio = track;
-        track.addEventListener("ended", () => {
-          if (this.#agentAudio !== track) return;
-          this.#agentAudio = null;
-          this.#audioStarted = false;
-          this.#emit({ type: "agent-audio-stopped" });
-        }, { once: true });
-        const stream = streams[0] ?? new MediaStream([track]);
-        this.#emit({ type: "agent-track", stream, track });
-      });
-
-      this.#localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
-      for (const track of this.#localStream.getTracks()) peer.addTrack(track, this.#localStream);
-
-      const channel = peer.createDataChannel("oai-events");
-      this.#dataChannel = channel;
-      channel.addEventListener("open", markConnected);
+      session.peer.addEventListener("connectionstatechange", () => {
+        if (["closed", "disconnected", "failed"].includes(session.peer.connectionState)) lost();
+      }, listenerOptions);
+      session.peer.addEventListener("track", ({ track, streams }) => {
+        if (!this.#live(session) || track.kind !== "audio") return;
+        session.agentAudio = track;
+        this.#emit({ type: "agent-track", stream: streams[0] ?? new MediaStream([track]), track, continuous: true });
+      }, listenerOptions);
+      await this.#openBrokerLease(session, sessionEndpoint);
+      ensureRequested();
+      const microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+      if (!requested() || session.phase !== "starting") {
+        microphone.getTracks().forEach((track) => track.stop());
+        ensureRequested();
+      }
+      session.microphone = microphone;
+      for (const track of microphone.getTracks()) session.peer.addTrack(track, microphone);
+      const channel = session.peer.createDataChannel("oai-events");
+      session.channel = channel;
+      channel.addEventListener("close", lost, listenerOptions);
+      channel.addEventListener("error", lost, listenerOptions);
       channel.addEventListener("message", ({ data }) => {
-        if (typeof data !== "string") return;
+        if (!this.#live(session) || typeof data !== "string") return;
         try {
-          const event = JSON.parse(data) as ProviderEvent;
-          for (const normalized of normalizeOpenAIEvent(event)) {
-            if (normalized.type === "agent-audio-started") {
-              if (this.#audioStarted) continue;
-              this.#audioStarted = true;
+          const event: unknown = JSON.parse(data);
+          const type = record(event)?.type;
+          if (type === "session.started" && session.phase === "starting") {
+            if (!requested()) {
+              session.rejectStartup(new Error("Live connection cancelled"));
+              return;
             }
-            if (normalized.type === "agent-audio-stopped") this.#audioStarted = false;
+            session.phase = "active";
+            this.#emit({ type: "connected" });
+            if (!requested() || session.phase !== "active") {
+              session.rejectStartup(new Error("Live connection cancelled"));
+              return;
+            }
+            session.resolveStartup();
+          }
+          for (const normalized of normalizeOpenAIEvent(event)) {
+            if (normalized.type === "provider-error" && session.phase === "starting") session.rejectStartup(new Error(normalized.message));
+            else this.#emit(normalized);
+          }
+          for (const normalized of session.tools.receive(event)) {
+            if (!this.#live(session)) break;
+            if (normalized.type === "tool-call" && session.phase !== "active") continue;
             this.#emit(normalized);
+          }
+          if (type === "session.closed") {
+            const usage = record(record(event)?.usage);
+            if (typeof usage?.seconds !== "number" || !Number.isFinite(usage.seconds) || usage.seconds < 0) {
+              this.#terminate(session, new Error("Live finalization ended without confirmed final usage"), true);
+            } else if (session.phase === "starting") {
+              this.#terminate(session, new Error("Live session closed before startup"), true);
+            } else {
+              this.#terminate(session, undefined, true);
+            }
           }
         } catch (error) {
           this.#emit({ type: "error", error: error instanceof Error ? error : new Error(String(error)) });
         }
-      });
-
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
-      const callResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+      }, listenerOptions);
+      await session.peer.setLocalDescription(await session.peer.createOffer());
+      await waitForIce(session.peer, session.abort.signal);
+      ensureRequested();
+      const sdp = session.peer.localDescription?.sdp;
+      if (!sdp) throw new Error("Missing local SDP offer");
+      const response = await fetch(sessionEndpoint, {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.value}`, "Content-Type": "application/sdp" },
-        body: offer.sdp ?? "",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ ...preferences, sdp }),
+        signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(25_000)]),
       });
-      if (!callResponse.ok) throw new Error(`Realtime call setup failed with status ${callResponse.status}`);
-      await peer.setRemoteDescription({ type: "answer", sdp: await callResponse.text() });
-      if (peer.connectionState === "connected" || ["connected", "completed"].includes(peer.iceConnectionState) || channel.readyState === "open") markConnected();
-      let connectionTimer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          connectionReady,
-          new Promise<never>((_, reject) => {
-            connectionTimer = setTimeout(() => reject(new Error("Realtime peer connection timed out")), 20_000);
-          }),
-        ]);
-      } finally {
-        if (connectionTimer !== undefined) clearTimeout(connectionTimer);
-      }
+      if (!response.ok) throw new Error(`Session endpoint failed with ${response.status}`);
+      const liveSession = parseLiveSession(await response.json());
+      ensureRequested();
+      await session.peer.setRemoteDescription({ type: "answer", sdp: liveSession.sdp });
+      session.startupTimer = setTimeout(() => session.rejectStartup(new Error("Live session startup timed out")), 20_000);
+      await session.startup;
+      ensureRequested();
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
-      this.#teardown();
-      this.#emit({ type: "error", error: normalized });
-      throw normalized;
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (session.phase !== "closed" && session.phase !== "closing") {
+        this.#release(session, failure);
+        this.#emit({ type: "error", error: failure });
+      }
+      throw failure;
+    } finally {
+      clearTimeout(session.startupTimer);
+      session.startupTimer = undefined;
     }
   }
 
   submitToolResult(result: RealtimeToolResult): void {
-    const channel = this.#dataChannel;
-    if (!channel || channel.readyState !== "open") {
-      throw new Error("Realtime data channel is not open");
+    const session = this.#session;
+    const channel = session?.channel;
+    if (session?.phase !== "active" || channel?.readyState !== "open") throw new Error("Live data channel is not ready");
+    if (!session.tools.pending(result.callId)) throw new Error("Unknown or already submitted Live function call");
+    try {
+      channel.send(JSON.stringify({ type: "response.item.create", event_id: crypto.randomUUID(), item: {
+        type: "function_call_output", call_id: result.callId, output: result.output,
+      } }));
+      if (session.tools.submitted(result.callId)) channel.send(JSON.stringify({ type: "response.create", event_id: crypto.randomUUID() }));
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.#terminate(session, new Error(`Live tool result delivery failed: ${failure.message}`), true);
+      throw failure;
     }
-    channel.send(JSON.stringify({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: result.callId,
-        output: result.output,
-      },
-    }));
-    const followUp = followUpCreateEvent(result.followUp);
-    if (followUp) channel.send(JSON.stringify(followUp));
   }
 
-  disconnect(): void {
-    if (this.#teardown()) this.#emit({ type: "disconnected" });
+  disconnect(): Promise<void> {
+    this.#connectRequest = undefined;
+    return this.#session ? this.#close(this.#session) : Promise.resolve();
   }
 
-  #teardown(): boolean {
-    const hadResources = this.#connected || Boolean(this.#dataChannel || this.#peer || this.#localStream || this.#agentAudio);
-    this.#connected = false;
-    this.#audioStarted = false;
-    this.#agentAudio = null;
-    const dataChannel = this.#dataChannel;
-    const peer = this.#peer;
-    const localStream = this.#localStream;
-    this.#dataChannel = undefined;
-    this.#peer = undefined;
-    this.#localStream = undefined;
-    dataChannel?.close();
-    peer?.close();
-    for (const track of localStream?.getTracks() ?? []) track.stop();
-    return hadResources;
+  #createSession(): LiveSession {
+    const peer = new RTCPeerConnection();
+    let resolveStartup: () => void = () => undefined;
+    let rejectStartup: (error: Error) => void = () => undefined;
+    const startup = new Promise<void>((resolve, reject) => { resolveStartup = resolve; rejectStartup = reject; });
+    void startup.catch(() => undefined);
+    return {
+      phase: "starting", peer, abort: new AbortController(), tools: new LiveToolBatches(), startup,
+      resolveStartup, rejectStartup, channel: undefined, microphone: undefined, agentAudio: null,
+      startupTimer: undefined, closeTimer: undefined, leaseDeadline: undefined, closing: undefined, finishClose: undefined,
+    };
   }
 
-  #emit(event: NormalizedRealtimeEvent): void {
-    for (const listener of this.#listeners) listener(event);
+  async #openBrokerLease(session: LiveSession, sessionEndpoint: string): Promise<void> {
+    this.#resetLeaseDeadline(session);
+    let response: Response;
+    try {
+      response = await fetch(sessionEndpoint, {
+        method: "GET",
+        headers: { Accept: "text/event-stream" },
+        cache: "no-store",
+        credentials: "omit",
+        signal: session.abort.signal,
+      });
+    } catch (error) {
+      if (session.abort.signal.aborted) throw error;
+      throw this.#brokerError(error);
+    }
+    if (!response.ok) throw new Error(`Session broker lease failed with ${response.status}`);
+    if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream")) throw new Error("Session broker lease returned an invalid content type");
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Session broker lease returned no stream");
+    const decoder = new TextDecoder();
+    let ready = "";
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("Session broker lease ended before ready");
+        if (chunk.value.byteLength === 0) continue;
+        this.#resetLeaseDeadline(session);
+        ready += decoder.decode(chunk.value, { stream: true });
+        if (ready.includes("event: ready")) break;
+        if (ready.length > 4_096) throw new Error("Session broker lease did not become ready");
+      }
+    } catch (error) {
+      if (session.abort.signal.aborted) throw error;
+      throw this.#brokerError(error);
+    }
+    void this.#readBrokerLease(session, reader);
   }
+
+  async #readBrokerLease(session: LiveSession, reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("Session broker disconnected; final session usage is unconfirmed");
+        if (chunk.value.byteLength > 0) this.#resetLeaseDeadline(session);
+      }
+    } catch (error) {
+      if (session.abort.signal.aborted || !this.#live(session)) return;
+      this.#brokerDisconnected(session, this.#brokerError(error));
+    }
+  }
+
+  #resetLeaseDeadline(session: LiveSession): void {
+    if (!this.#live(session)) return;
+    clearTimeout(session.leaseDeadline);
+    session.leaseDeadline = setTimeout(() => {
+      this.#brokerDisconnected(session, new Error("Session broker heartbeat timed out; final session usage is unconfirmed"));
+    }, 15_000);
+  }
+
+  #brokerDisconnected(session: LiveSession, error: Error): void {
+    if (!this.#live(session) || session.abort.signal.aborted) return;
+    try {
+      if (session.channel?.readyState === "open") session.channel.send(JSON.stringify({ type: "session.close" }));
+    } catch {}
+    this.#terminate(session, error, true);
+  }
+
+  #brokerError(cause: unknown): Error {
+    return new Error("Session broker disconnected; final session usage is unconfirmed", { cause });
+  }
+
+  #close(session: LiveSession): Promise<void> {
+    if (session.phase === "closed") return Promise.resolve();
+    if (session.closing) return session.closing;
+    if (session.phase !== "active") {
+      this.#terminate(session, undefined, true);
+      return Promise.resolve();
+    }
+    if (session.channel?.readyState !== "open") {
+      this.#terminate(session, new Error("Live finalization failed; final session usage is unconfirmed"), true);
+      return Promise.resolve();
+    }
+    session.phase = "closing";
+    session.microphone?.getTracks().forEach((track) => track.stop());
+    session.microphone = undefined;
+    session.rejectStartup(new Error("Live connection cancelled"));
+    session.closing = new Promise<void>((resolve) => { session.finishClose = resolve; });
+    session.closeTimer = setTimeout(() => {
+      this.#terminate(session, new Error("Live finalization timed out; final session usage is unconfirmed"), true);
+    }, 15_000);
+    try {
+      session.channel.send(JSON.stringify({ type: "session.close" }));
+    } catch {
+      this.#terminate(session, new Error("Live close failed; final session usage is unconfirmed"), true);
+    }
+    return session.closing;
+  }
+
+  #terminate(session: LiveSession, error: Error | undefined, disconnected: boolean): void {
+    if (!this.#release(session, error ?? new Error("Live connection cancelled"))) return;
+    if (error) this.#emit({ type: "error", error });
+    if (disconnected && !this.#session) this.#emit({ type: "disconnected" });
+  }
+
+  #release(session: LiveSession, startupError: Error): boolean {
+    if (session.phase === "closed") return false;
+    session.phase = "closed";
+    clearTimeout(session.startupTimer);
+    clearTimeout(session.closeTimer);
+    clearTimeout(session.leaseDeadline);
+    session.startupTimer = undefined;
+    session.closeTimer = undefined;
+    session.leaseDeadline = undefined;
+    session.abort.abort();
+    session.rejectStartup(startupError);
+    session.channel?.close();
+    session.peer.close();
+    session.microphone?.getTracks().forEach((track) => track.stop());
+    session.channel = undefined;
+    session.microphone = undefined;
+    session.agentAudio = null;
+    if (this.#session === session) this.#session = undefined;
+    session.finishClose?.();
+    session.finishClose = undefined;
+    return true;
+  }
+
+  #emit(event: NormalizedRealtimeEvent): void { for (const listener of this.#listeners) listener(event); }
 }

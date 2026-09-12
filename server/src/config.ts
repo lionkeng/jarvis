@@ -8,8 +8,8 @@ export interface ServerConfig {
   sessionBudgetRequests: number;
   sessionBudgetWindowMs: number;
   maxOutputTokens: number;
-  contextTokenLimit: number;
-  realtimeTracing: boolean;
+  backendModel: string;
+  lifetimeStreamsPerOrigin: number;
 }
 
 function positiveInteger(name: string, value: string | undefined, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
@@ -20,14 +20,6 @@ function positiveInteger(name: string, value: string | undefined, fallback: numb
     throw new Error(`${name} must be between 1 and ${maximum}`);
   }
   return parsed;
-}
-
-function realtimeTracing(value: string | undefined): boolean {
-  const parsed = value?.trim() ?? "";
-  if (parsed === "") return true;
-  if (parsed === "true") return true;
-  if (parsed === "false") return false;
-  throw new Error("OPENAI_REALTIME_TRACING must be true or false");
 }
 
 function allowedOrigins(value: string | undefined): string[] {
@@ -43,17 +35,19 @@ function allowedOrigins(value: string | undefined): string[] {
 export function readConfig(env: Record<string, string | undefined> = Bun.env): ServerConfig {
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+  const maxOutputTokens = positiveInteger("MAX_OUTPUT_TOKENS", env.MAX_OUTPUT_TOKENS, 768, 4_096);
+  if (maxOutputTokens < 16) throw new Error("MAX_OUTPUT_TOKENS must be at least 16");
   return {
     apiKey,
-    model: env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1-mini",
+    model: env.OPENAI_LIVE_MODEL?.trim() || "gpt-live-1",
     allowedOrigins: allowedOrigins(env.ALLOWED_ORIGINS),
     port: positiveInteger("PORT", env.PORT, 3010, 65_535),
     rateLimitRequests: positiveInteger("RATE_LIMIT_REQUESTS", env.RATE_LIMIT_REQUESTS, 8),
     rateLimitWindowMs: positiveInteger("RATE_LIMIT_WINDOW_MS", env.RATE_LIMIT_WINDOW_MS, 60_000),
     sessionBudgetRequests: positiveInteger("SESSION_BUDGET_REQUESTS", env.SESSION_BUDGET_REQUESTS, 30),
     sessionBudgetWindowMs: positiveInteger("SESSION_BUDGET_WINDOW_MS", env.SESSION_BUDGET_WINDOW_MS, 3_600_000),
-    maxOutputTokens: positiveInteger("MAX_OUTPUT_TOKENS", env.MAX_OUTPUT_TOKENS, 768, 4_096),
-    contextTokenLimit: positiveInteger("CONTEXT_TOKEN_LIMIT", env.CONTEXT_TOKEN_LIMIT, 8_000),
-    realtimeTracing: realtimeTracing(env.OPENAI_REALTIME_TRACING),
+    maxOutputTokens,
+    backendModel: env.OPENAI_LIVE_BACKEND_MODEL?.trim() || "gpt-5.6-luna",
+    lifetimeStreamsPerOrigin: positiveInteger("LIFETIME_STREAMS_PER_ORIGIN", env.LIFETIME_STREAMS_PER_ORIGIN, 4),
   };
 }

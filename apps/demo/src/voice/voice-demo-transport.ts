@@ -215,28 +215,18 @@ export class VoiceDemoTransport implements RealtimeTransport {
 }
 
 function spokenFollowUp(result: RealtimeToolResult): string | undefined {
-  switch (result.followUp) {
-    case "none":
-      return undefined;
-    case "brief-acknowledgement":
-      return messageFromOutput(result.output) ?? "Done.";
-    case "default":
-      return messageFromOutput(result.output) ?? FAILURE_MESSAGES.execution_failed;
-    default: {
-      const _exhaustive: never = result.followUp;
-      return _exhaustive;
-    }
-  }
+  const output = parseOutput(result.output);
+  const message = typeof output?.message === "string" ? output.message : undefined;
+  if (output?.ok === true) return message ?? "Done.";
+  if (output?.code === "cancelled") return undefined;
+  return message ?? FAILURE_MESSAGES.execution_failed;
 }
 
-function messageFromOutput(output: string): string | undefined {
+function parseOutput(output: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(output);
-    if (parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") {
-      return parsed.message;
-    }
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
   } catch {
     return undefined;
   }
-  return undefined;
 }

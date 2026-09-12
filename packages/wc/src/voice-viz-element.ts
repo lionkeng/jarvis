@@ -60,8 +60,8 @@ export class VoiceVizElement extends HTMLElement {
     await this.#instance?.connect(this.tokenEndpoint);
   }
 
-  disconnect(): void {
-    this.#instance?.disconnect();
+  async disconnect(): Promise<void> {
+    await this.#instance?.disconnect();
   }
 
   #presets(): PresetName[] {

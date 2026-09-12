@@ -1,9 +1,61 @@
 import { describe, expect, it } from "vitest";
 import { createIdleFeatures } from "../audio/idle-features.js";
+import type { TranscriptMessage } from "../transcript/types.js";
 import { PretextLayout } from "./pretext-layout.js";
 import { StreamingTextPanel } from "./streaming-panel.js";
 
 describe("StreamingTextPanel", () => {
+  it("projects keyed transcript messages incrementally and corrects canonical text", () => {
+    const panel = new StreamingTextPanel(new PretextLayout("500 16px monospace"));
+    panel.setViewport(500, 100);
+    const message = (text: string, status: TranscriptMessage["status"] = "streaming"): TranscriptMessage => ({
+      id: "message-1", role: "agent", text, status, startedAt: 1, updatedAt: 1,
+    });
+
+    panel.upsert(message("Hello "), 1);
+    const afterFirst = panel.prepareCount;
+    panel.upsert(message("Hello world"), 2);
+    expect(panel.prepareCount).toBe(afterFirst);
+    expect(panel.lines.map((line) => line.text).join("")).toBe("Hello world");
+
+    panel.upsert(message("Well, hello world", "complete"), 3);
+    expect(panel.lines.map((line) => line.text).join("")).toBe("Well, hello world");
+    expect(panel.lines.every((line) => line.complete)).toBe(true);
+  });
+
+  it("corrects an older keyed utterance without losing deliberate scrollback", () => {
+    const panel = new StreamingTextPanel(new PretextLayout("500 16px monospace"));
+    panel.setViewport(72, 52);
+    const message = (id: string, text: string, status: TranscriptMessage["status"]): TranscriptMessage => ({
+      id, role: "agent", text, status, startedAt: 1, updatedAt: 1,
+    });
+    panel.upsert(message("first", "one two three four five six ", "complete"), 1);
+    panel.upsert(message("second", "seven eight nine ten eleven twelve ", "complete"), 2);
+    panel.scrollBy(-52);
+    const anchor = panel.scrollAnchorLine;
+
+    panel.upsert(message("first", "zero one two three four five six ", "complete"), 3);
+
+    expect(panel.lines.map((line) => line.text).join("")).toContain("zero one two three four five six");
+    expect(panel.isPinnedToLatest).toBe(false);
+    expect(panel.scrollAnchorLine).toBe(anchor);
+  });
+
+  it("keeps the current caption active while correcting an older message", () => {
+    const panel = new StreamingTextPanel(new PretextLayout("500 16px monospace"));
+    panel.setViewport(500, 100);
+    const message = (id: string, text: string): TranscriptMessage => ({
+      id, role: "agent", text, status: "streaming", startedAt: 1, updatedAt: 1,
+    });
+    panel.upsert(message("first", "Old text"), 1);
+    panel.upsert(message("second", "New"), 2);
+    panel.upsert({ ...message("first", "Corrected old text"), status: "complete" }, 3);
+    panel.upsert(message("second", "New text"), 4);
+    expect(panel.lines.map(({ text, complete }) => [text, complete])).toEqual([
+      ["Corrected old text", true], ["New text", false],
+    ]);
+  });
+
   it("does not mutate committed lines while appending", () => {
     const panel = new StreamingTextPanel(new PretextLayout("500 16px monospace"));
     panel.setViewport(84, 100);

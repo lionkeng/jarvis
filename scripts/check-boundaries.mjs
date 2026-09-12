@@ -28,8 +28,8 @@ for (const file of sourceFiles(coreSource)) {
   if (file.includes("/render/") && /from ["'][^"']*(?:transport\/openai|audio\/media-stream-analyser)/.test(text)) {
     fail(file, "renderer code may consume leaf contracts, not transport or analyser implementations");
   }
-  if (!file.includes("/transport/openai.") && /(?:input_audio_buffer\.|response\.(?:audio|output_audio|audio_transcript|output_audio_transcript|text|output_text|function_call_arguments|create\b)|conversation\.item\.(?:input_audio_transcription|create)|function_call_output)/.test(text)) {
-    fail(file, "raw OpenAI event names belong only in transport/openai.ts");
+  if (!file.includes("/transport/") && /(?:session\.(?:input_transcript|output_transcript|close|started|usage|delegation)|input_audio_buffer\.|response\.(?:event|output_item|item|completed|failed|incomplete|cancelled|audio|output_audio|audio_transcript|output_audio_transcript|text|output_text|function_call_arguments|create\b)|conversation\.item\.(?:input_audio_transcription|create)|function_call_output)/.test(text)) {
+    fail(file, "raw OpenAI event names belong only in transport/");
   }
 }
 
@@ -77,7 +77,7 @@ for (const file of packageManifests(root)) {
 const coreIndex = join(coreSource, "index.ts");
 if (existsSync(coreIndex)) {
   const text = readFileSync(coreIndex, "utf8");
-  for (const forbidden of ["OpenAIRealtimeTransport", "CanvasRenderer", "Visualizer"]) {
+  for (const forbidden of ["OpenAILiveTransport", "OpenAIRealtimeTransport", "CanvasRenderer", "Visualizer"]) {
     if (text.includes(forbidden)) fail(coreIndex, `${forbidden} is an internal implementation, not a public export`);
   }
 }
@@ -86,7 +86,7 @@ const serverSource = join(root, "server/src");
 for (const file of sourceFiles(serverSource)) {
   const text = readFileSync(file, "utf8");
   if (!file.endsWith("/config.ts") && /\bBun\.env\b/.test(text)) fail(file, "only server/src/config.ts may read Bun.env");
-  if (!file.endsWith("/index.ts") && /\bBun\.serve\b/.test(text)) fail(file, "only server/src/index.ts may start an HTTP listener");
+  if (!file.endsWith("/index.ts") && !file.endsWith(".test.ts") && /\bBun\.serve\b/.test(text)) fail(file, "only server/src/index.ts may start an HTTP listener");
   if (/(?:globalThis\.)?(?:window|document)\.|\b(?:HTMLElement|HTMLCanvasElement|AudioContext|RTCPeerConnection)\b/.test(text)) {
     fail(file, "server package must not depend on browser globals");
   }

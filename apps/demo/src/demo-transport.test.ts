@@ -23,7 +23,7 @@ describe("DemoVoiceFeatureSource", () => {
 describe("DemoTransport", () => {
   it("records submitted tool results without emitting provider event names", () => {
     const transport = new DemoTransport();
-    const result: RealtimeToolResult = { callId: "call_1", output: "{\"ok\":true}", followUp: "brief-acknowledgement" };
+    const result: RealtimeToolResult = { callId: "call_1", output: "{\"ok\":true}" };
     transport.submitToolResult(result);
     expect(transport.submittedToolResults).toEqual([result]);
   });

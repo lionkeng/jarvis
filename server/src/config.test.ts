@@ -6,7 +6,7 @@ describe("readConfig", () => {
     expect(() => readConfig({})).toThrow("OPENAI_API_KEY");
     const config = readConfig({ OPENAI_API_KEY: " secret ", ALLOWED_ORIGINS: "https://voice.example/, http://localhost:5180" });
     expect(config.apiKey).toBe("secret");
-    expect(config.model).toBe("gpt-realtime-2.1-mini");
+    expect(config.model).toBe("gpt-live-1");
     expect(config.allowedOrigins).toEqual(["https://voice.example", "http://localhost:5180"]);
   });
 
@@ -16,23 +16,17 @@ describe("readConfig", () => {
     expect(() => readConfig({ OPENAI_API_KEY: "key", ALLOWED_ORIGINS: "javascript:alert(1)" })).toThrow("protocol");
   });
 
-  test("enables realtime tracing when OPENAI_REALTIME_TRACING is missing or blank", () => {
-    expect(readConfig({ OPENAI_API_KEY: "key" }).realtimeTracing).toBe(true);
-    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "" }).realtimeTracing).toBe(true);
-    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "   " }).realtimeTracing).toBe(true);
+  test("defaults and reads the concurrent lifetime stream cap", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key" }).lifetimeStreamsPerOrigin).toBe(4);
+    expect(readConfig({ OPENAI_API_KEY: "key", LIFETIME_STREAMS_PER_ORIGIN: "12" }).lifetimeStreamsPerOrigin).toBe(12);
+    expect(() => readConfig({ OPENAI_API_KEY: "key", LIFETIME_STREAMS_PER_ORIGIN: "0" })).toThrow("LIFETIME_STREAMS_PER_ORIGIN");
   });
 
-  test("parses exact true and false for OPENAI_REALTIME_TRACING after trim", () => {
-    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "true" }).realtimeTracing).toBe(true);
-    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "false" }).realtimeTracing).toBe(false);
-    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: " true " }).realtimeTracing).toBe(true);
-    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: " false " }).realtimeTracing).toBe(false);
-  });
-
-  test("rejects invalid OPENAI_REALTIME_TRACING values without coercing", () => {
-    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "TRUE" })).toThrow("OPENAI_REALTIME_TRACING");
-    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "1" })).toThrow("OPENAI_REALTIME_TRACING");
-    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "yes" })).toThrow("OPENAI_REALTIME_TRACING");
-    expect(() => readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_TRACING: "on" })).toThrow("OPENAI_REALTIME_TRACING");
+  test("configures the backend independently and ignores old Realtime settings", () => {
+    const config = readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_MODEL: "old", OPENAI_REALTIME_TRACING: "true" });
+    expect(config.model).toBe("gpt-live-1");
+    expect(config.backendModel).toBe("gpt-5.6-luna");
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_LIVE_BACKEND_MODEL: "gpt-5.6-terra" }).backendModel).toBe("gpt-5.6-terra");
+    expect(() => readConfig({ OPENAI_API_KEY: "key", MAX_OUTPUT_TOKENS: "15" })).toThrow("at least 16");
   });
 });

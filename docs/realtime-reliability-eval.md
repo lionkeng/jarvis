@@ -1,21 +1,23 @@
-# How to evaluate Realtime UI tool reliability
+# How to evaluate GPT-Live UI tool reliability
 
-Use this procedure to score live OpenAI Realtime sessions for the voice demo. Deterministic simulation proves the browser executor. It does not prove model routing, argument quality, or acknowledgement length.
+Use this procedure to score live GPT Live-1 sessions for the voice demo. Deterministic simulation proves the browser executor. It does not prove model routing, argument quality, or acknowledgement length.
 
 The scoring rules and corpus live in `thoughts/shared/plans/2026-08-20-realtime-tool-reliability/testing.md`. Record each trial with the fields listed there. Compare a completed run with `thoughts/shared/research/2026-08-20-realtime-reliability-baseline.md` and store the scored table in `thoughts/shared/research/2026-08-20-realtime-reliability-results.md`.
 
-## Start a traced live session
+## Start a Live session
 
-1. Start the BFF from `server/` with no `OPENAI_REALTIME_TRACING` value, or with `OPENAI_REALTIME_TRACING=true`.
-2. Start the demo at `http://localhost:5180/voice.html?mode=live`.
-3. Connect a new Realtime session after the BFF start. Do not reuse a session created before a tracing-setting change.
-4. Confirm the session appears in the [Traces dashboard](https://platform.openai.com/logs?api=traces). Tracing is chosen when the client secret is minted. You cannot turn it on later for the same session.
+1. Set `OPENAI_API_KEY` in `server/.env` and start the BFF. Defaults are `OPENAI_LIVE_MODEL=gpt-live-1` and `OPENAI_LIVE_BACKEND_MODEL=gpt-5.6-luna`.
+2. Open `http://localhost:5180/voice.html`, select **OpenAI live**, and connect.
+3. Confirm startup waits for `session.started`. Speak and verify both audible playback and UI action results.
+4. End the conversation and confirm `session.closed` supplies final cumulative voice seconds. A dropped connection or timeout leaves final usage unconfirmed.
 
-To disable tracing, restart the BFF with `OPENAI_REALTIME_TRACING=false`, then connect a new session. Confirm no new trace is created. Invalid values such as `TRUE` or `1` must fail BFF startup.
+The historical Realtime baseline and corpus remain unchanged for comparison. Live does not accept the old tracing, VAD, speed, or truncation settings. Record both model IDs, pacing preferences, spoken captions, backend events, action results, and usage for each Live trial.
+
+Check overlapping speech without cancelling backend actions, late caption fragments, duplicate function items, failures, and reconnects. Backend text must not appear as spoken captions. Score short acknowledgements from actual speech; prompt instructions cannot guarantee exact length or silence.
 
 ## Reset UI state between independent trials
 
-Reset the hash route to `#/dashboard` and restore the demo model to its starting theme, library selection, details-panel, bookmark, and scroll positions. Independent trials need a fresh UI even when you keep the same Realtime connection. Fresh-session cases also need a new Realtime connection.
+Reset the hash route to `#/dashboard` and restore the demo model to its starting theme, library selection, details-panel, bookmark, and scroll positions. Independent trials need a fresh UI even when you keep the same Live connection. Fresh-session cases also need a new Live connection.
 
 ## Run the chained library then article case
 
@@ -48,4 +50,4 @@ Assign exactly one primary stage.
 
 ## Simulator results
 
-The simulated scripts on `voice.html` without `mode=live` exercise the interaction actor and ordered executor. Mark those rows as simulation. Do not count them toward the 19 of 20 live routing gate.
+The simulated scripts on `voice.html` in simulation mode exercise the interaction actor and ordered executor. Mark those rows as simulation. Do not count them toward the 19 of 20 live routing gate.

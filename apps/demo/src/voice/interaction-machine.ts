@@ -1,5 +1,5 @@
 import { assign, createActor, enqueueActions, fromPromise, setup } from "xstate";
-import type { RealtimeToolCall, RealtimeToolFollowUpIntent, RealtimeToolResult } from "@jarvis-viz/core";
+import type { RealtimeToolCall, RealtimeToolResult } from "@jarvis-viz/core";
 import {
   CapabilityRegistryError,
   type UiCapabilityRegistry,
@@ -130,45 +130,20 @@ function cancelledResult(context: InteractionContext): UiCommandBatchFailure {
   return failureResult("cancelled", [...context.applied]);
 }
 
-function followUpFor(result: UiCommandBatchResult): RealtimeToolFollowUpIntent {
-  if (result.ok) return "brief-acknowledgement";
-  switch (result.code) {
-    case "cancelled":
-      return "none";
-    case "invalid_arguments":
-    case "target_unavailable":
-    case "execution_failed":
-    case "queue_full":
-      return "default";
-    default: {
-      const _exhaustive: never = result.code;
-      return _exhaustive;
-    }
-  }
-}
-
 function reportVoiceResult(input: ReportInput): void {
   const { request, result, resultPort, submittedCallIds } = input;
   if (!request || request.source !== "voice" || !result) return;
   const callId = request.call.callId;
   if (submittedCallIds.has(callId)) return;
   submittedCallIds.add(callId);
-  resultPort.submit({
-    callId,
-    output: serializeBatchResult(result),
-    followUp: followUpFor(result),
-  });
+  resultPort.submit({ callId, output: serializeBatchResult(result) });
 }
 
 function submitOverflowResult(context: InteractionContext, callId: string): void {
   if (context.submittedCallIds.has(callId)) return;
   const result = failureResult("queue_full", []);
   context.submittedCallIds.add(callId);
-  context.resultPort.submit({
-    callId,
-    output: serializeBatchResult(result),
-    followUp: followUpFor(result),
-  });
+  context.resultPort.submit({ callId, output: serializeBatchResult(result) });
 }
 
 function isOkValidation(output: unknown): output is { status: "ok"; commands: UiCommand[] } {

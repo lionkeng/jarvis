@@ -13,3 +13,4 @@ server/.env
 .env
 *.tgz
 thoughts/
+.audit/

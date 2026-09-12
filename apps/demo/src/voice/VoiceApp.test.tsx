@@ -39,6 +39,29 @@ async function settle(): Promise<void> {
   }
 }
 
+function lifetimeResponse(signal: AbortSignal | null | undefined) {
+  let timer: ReturnType<typeof setInterval>;
+  let finish = () => {};
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const heartbeat = () => controller.enqueue(new TextEncoder().encode("data: alive\n\n"));
+      controller.enqueue(new TextEncoder().encode("event: ready\ndata: {}\n\n"));
+      timer = setInterval(heartbeat, 5_000);
+      finish = () => {
+        clearInterval(timer);
+        signal?.removeEventListener("abort", finish);
+        controller.close();
+      };
+      signal?.addEventListener("abort", finish, { once: true });
+    },
+    cancel() {
+      clearInterval(timer);
+      signal?.removeEventListener("abort", finish);
+    },
+  });
+  return { response: new Response(body, { headers: { "Content-Type": "text/event-stream" } }), finish: () => finish() };
+}
+
 function namedButton(host: HTMLElement, scope: string, label: string): HTMLButtonElement {
   const button = [...host.querySelectorAll(`${scope} button`)].find((node) => node.textContent === label);
   if (!(button instanceof HTMLButtonElement)) throw new Error(`missing ${scope} button ${label}`);
@@ -155,8 +178,21 @@ describe("VoiceApp", () => {
   });
 
   it("posts the session endpoint when Connect is clicked in live mode", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "Origin is not allowed" }), { status: 403 }));
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => init?.method === "POST"
+      ? new Response(JSON.stringify({ error: "Origin is not allowed" }), { status: 403 })
+      : lifetimeResponse(init?.signal).response);
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("RTCPeerConnection", class {
+      iceGatheringState = "complete";
+      localDescription = { type: "offer", sdp: "v=0" };
+      addEventListener() {}
+      addTrack() {}
+      close() {}
+      createDataChannel() { return { addEventListener() {}, close() {} }; }
+      async createOffer() { return this.localDescription; }
+      async setLocalDescription() {}
+    });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
     const { host, root } = await mountApp();
     await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
     await settle();
@@ -164,9 +200,88 @@ describe("VoiceApp", () => {
     await act(async () => { namedButton(host, ".session", "Connect").click(); });
     await settle();
     expect(fetchMock).toHaveBeenCalled();
-    const sessionCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/session"));
+    const sessionCall = fetchMock.mock.calls.find((call) => call[1]?.method === "POST");
     expect(sessionCall?.[0]).toBe("http://localhost:3010/session");
     expect(host.querySelector(".toolbar span")?.textContent).toMatch(/Session endpoint failed|Origin is not allowed|Failed to fetch|Connecting/);
+    await unmountApp(root, host);
+  });
+
+  it.each(["close timeout", "server loss"])("keeps %s visible and unlocks connection controls", async (reason) => {
+    let deliver: ((event: { data: string }) => void) | undefined;
+    let lifetime: ReturnType<typeof lifetimeResponse> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") return Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } });
+      lifetime = lifetimeResponse(init?.signal);
+      return lifetime.response;
+    }));
+    const channel = {
+      readyState: "open",
+      send() {}, close() {},
+      addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
+    };
+    vi.stubGlobal("RTCPeerConnection", class {
+      iceGatheringState = "complete";
+      localDescription = { type: "offer", sdp: "v=0" };
+      addEventListener() {} addTrack() {} close() {}
+      createDataChannel() { return channel; }
+      async createOffer() { return this.localDescription; }
+      async setLocalDescription() {}
+      async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
+    });
+    const stopMicrophone = vi.fn();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: stopMicrophone }] }) } });
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    if (reason === "close timeout") {
+      await act(async () => { namedButton(host, ".session", "Disconnect").click(); });
+      expect(namedButton(host, ".session", "Finishing…").disabled).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    } else {
+      await act(async () => { lifetime!.finish(); });
+      expect(stopMicrophone).toHaveBeenCalledOnce();
+    }
+    expect(host.querySelector(".toolbar span")?.textContent).toContain("usage is unconfirmed");
+    expect(namedButton(host, ".session", "Connect").disabled).toBe(false);
+    await unmountApp(root, host);
+  });
+
+  it("shows rejected commands and failed backend responses without dropping the live session", async () => {
+    let deliver: ((event: { data: string }) => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => init?.method === "POST"
+      ? Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } })
+      : lifetimeResponse(init?.signal).response));
+    const channel = {
+      readyState: "open",
+      send() {}, close() {},
+      addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
+    };
+    vi.stubGlobal("RTCPeerConnection", class {
+      iceGatheringState = "complete";
+      localDescription = { type: "offer", sdp: "v=0" };
+      addEventListener() {} addTrack() {} close() {}
+      createDataChannel() { return channel; }
+      async createOffer() { return this.localDescription; }
+      async setLocalDescription() {}
+      async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
+    });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    const send = (event: unknown) => deliver?.({ data: JSON.stringify(event) });
+
+    await act(async () => { send({ type: "error", error: { type: "invalid_request_error", code: "unknown_parameter", message: "Unknown parameter", client_event_id: "evt_1" } }); });
+    expect(host.querySelector(".toolbar span")?.textContent).toBe("Unknown parameter");
+
+    await act(async () => {
+      send({ type: "response.event", delegation_id: "delegation_1", event: { type: "response.created", response: { id: "resp_1", output: [] } } });
+      send({ type: "response.event", delegation_id: "delegation_1", event: { type: "response.failed", response: { id: "resp_1" } } });
+    });
+    expect(host.querySelector(".toolbar span")?.textContent).toBe("Backend response failed");
+    expect(namedButton(host, ".session", "Disconnect").disabled).toBe(false);
     await unmountApp(root, host);
   });
 
