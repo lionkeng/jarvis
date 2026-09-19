@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { LEGACY_POST_BODY, OPENAI_GRANT } from "../../../scripts/fixtures/session-wire.js";
 import { createSessionRoute } from "./session.js";
 import type { ServerConfig } from "../config.js";
 
@@ -140,6 +141,17 @@ describe("session route", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("access-control-allow-origin")).toBe("https://voice.example");
     expect(await response.json()).toEqual(answer);
+  });
+
+  test("issues the OpenAI grant for a legacy POST body with no protocol", async () => {
+    const route = createSessionRoute({ config, fetcher: async () => Response.json(OPENAI_GRANT) });
+    const response = await route(new Request("http://localhost/session", {
+      method: "POST",
+      headers: { Origin: "https://voice.example", "Content-Type": "application/json" },
+      body: JSON.stringify(LEGACY_POST_BODY),
+    }));
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual(OPENAI_GRANT);
   });
 
   test("creates sessions for other loopback origins when localhost is configured", async () => {

@@ -46,7 +46,8 @@ function stubConnection(autoStart = true) {
     });
   }
   const peer = new Peer();
-  vi.stubGlobal("RTCPeerConnection", class { constructor() { return peer; } });
+  const constructed = vi.fn();
+  vi.stubGlobal("RTCPeerConnection", class { constructor() { constructed(); return peer; } });
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => microphone) } });
   const lease = brokerLease();
   const fetcher = vi.fn(async (_input, init: RequestInit | undefined) => init?.method === "GET" ? lease.response : Response.json(answer, { status: 201 }));
@@ -58,7 +59,7 @@ function stubConnection(autoStart = true) {
   const created = () => backend({ type: "response.created", response: { id: "resp_1", output: [] } });
   const completed = () => backend({ type: "response.completed", response: { id: "resp_1", output: [] } });
   const sent = () => channel.send.mock.calls.map(([json]) => JSON.parse(String(json)));
-  return { transport, channel, peer, track, fetcher, lease, deliver, close, backend, call, created, completed, sent };
+  return { transport, channel, peer, constructed, track, fetcher, lease, deliver, close, backend, call, created, completed, sent };
 }
 
 function stubMultipleConnections() {
@@ -196,7 +197,7 @@ describe("Live connection", () => {
     h.fetcher.mockResolvedValueOnce(new Response(null, { status: 502 }));
     await expect(h.transport.connect("/session")).rejects.toThrow("broker lease failed with 502");
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
-    expect(h.peer.close).toHaveBeenCalledOnce();
+    expect(h.constructed).not.toHaveBeenCalled();
   });
 
   it("immediately releases an active session when the broker lease ends", async () => {

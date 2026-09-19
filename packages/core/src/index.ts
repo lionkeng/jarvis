@@ -9,3 +9,5 @@ export type { TextMotion, Theme, ThemeInput, ThemeName } from "./render/theme.js
 export { TranscriptStore } from "./transcript/store.js";
 export type { TranscriptFragment, TranscriptMessage, TranscriptRole, TranscriptSnapshot, TranscriptStatus } from "./transcript/types.js";
 export type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport, ResponseTiming } from "./transport/types.js";
+export { createLiveTransport } from "./transport/live-transport.js";
+export type { ProtocolId as LiveProtocolId } from "./transport/broker.js";

@@ -15,7 +15,7 @@ import { AudioTextSynchronizer } from "./text/audio-text-sync.js";
 import { StreamingTextPanel } from "./text/streaming-panel.js";
 import { TranscriptStore } from "./transcript/store.js";
 import type { TranscriptSnapshot } from "./transcript/types.js";
-import { OpenAILiveTransport } from "./transport/openai.js";
+import { LiveTransport } from "./transport/live-transport.js";
 import type { NormalizedRealtimeEvent, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "./transport/types.js";
 
 export interface VoiceVizOptions {
@@ -92,7 +92,7 @@ export class VoiceViz {
     const textLayout = options.locale ? new PretextLayout(undefined, { locale: options.locale }) : new PretextLayout();
     this.#panel = new StreamingTextPanel(textLayout);
     this.#audioText = new AudioTextSynchronizer((delta, now) => this.#appendAgentText(delta, now));
-    this.#transport = options.transport ?? new OpenAILiveTransport();
+    this.#transport = options.transport ?? new LiveTransport();
     this.#featureSource = options.featureSource;
     this.#regions = computeRegions(1, 1, { placement: this.#placement, breakpoint: this.#breakpoint });
     this.#unsubscribeTransport = this.#transport.subscribe((event) => this.#handleTransport(event));
