@@ -1,4 +1,4 @@
-import { themes, VoiceViz, type PanelPlacement, type PresetName, type ThemeName } from "@jarvis-viz/core";
+import { themes, VoiceViz, type PanelPlacement, type PresetName, type RealtimeTransport, type ThemeName } from "@jarvis-viz/core";
 import { voiceVizElementStyles } from "./styles.js";
 
 export class VoiceVizElement extends HTMLElement {
@@ -6,6 +6,7 @@ export class VoiceVizElement extends HTMLElement {
   readonly #root: ShadowRoot;
   readonly #mount: HTMLDivElement;
   #instance: VoiceViz | undefined;
+  #transport: RealtimeTransport | undefined;
 
   constructor() {
     super();
@@ -55,6 +56,20 @@ export class VoiceVizElement extends HTMLElement {
     return value === "bottom" || value === "side" ? value : "auto";
   }
 
+  get transport(): RealtimeTransport | undefined {
+    return this.#transport;
+  }
+
+  set transport(value: RealtimeTransport | undefined) {
+    if (value === this.#transport) return;
+    if (this.#instance?.connected) throw new Error("jarvis-voice-viz cannot swap transport during a live session: call disconnect() first");
+    this.#transport = value;
+    if (!this.#instance) return;
+    this.#instance.unmount();
+    this.#instance = new VoiceViz(this.#options());
+    this.#instance.mount(this.#mount);
+  }
+
   async connect(): Promise<void> {
     if (!this.#instance) this.connectedCallback();
     await this.#instance?.connect(this.tokenEndpoint);
@@ -71,7 +86,7 @@ export class VoiceVizElement extends HTMLElement {
   }
 
   #options() {
-    return { presets: this.#presets(), theme: this.theme, panelPlacement: this.panelPlacement };
+    return { presets: this.#presets(), theme: this.theme, panelPlacement: this.panelPlacement, ...(this.#transport ? { transport: this.#transport } : {}) };
   }
 }
 
