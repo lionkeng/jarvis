@@ -42,7 +42,7 @@ Open `/voice.html#/dashboard`. Simulation mode needs no credentials. Live mode u
 
 Spoken UI requests become one `perform_ui_actions` call. `VoiceViz` emits a `toolcall` event. A demo-only XState actor validates the call, runs a registered capability, and returns one result through `submitToolResult`. Ordinary questions stay in conversation and do not change the page.
 
-The voice model defaults to `gpt-live-1`. UI actions run through Responses delegation with `gpt-5.6-luna`, configured independently by `OPENAI_LIVE_BACKEND_MODEL`. `MAX_OUTPUT_TOKENS` caps the backend output. Voice timing and speed are prompt preferences, so exact timing and playback speed are not guaranteed. Live manages context automatically; the old `OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_TRACING`, and `CONTEXT_TOKEN_LIMIT` settings no longer apply.
+The voice model defaults to `gpt-live-1`. UI actions run through Responses delegation with `gpt-5.6-luna`. Voice timing and speed are prompt preferences, so exact timing and playback speed are not guaranteed.
 
 Live evaluation instructions are in `docs/realtime-reliability-eval.md`. Open the voice demo, select **OpenAI live**, and connect. Captions preserve each speaker's fragments and timestamps independently. Speaking over the assistant does not cancel a pending UI action.
 
@@ -127,8 +127,28 @@ the component's Shadow DOM.
 
 ## Bun BFF (Backend For Frontend)
 
-The BFF is deliberately simple for demo purposes. It has no application auth, and a small in-memory footprint for session rate-limit and session-budget state. Copy `server/.env.example` to `server/.env`,
-set the API key and exact allowed origins, then run `pnpm dev:server`. Production builds use:
+The BFF is a demo service with no application auth. Copy `server/.env.example` to `server/.env`. `server/src/config.ts` reads these variables.
+
+Required:
+
+- `OPENAI_API_KEY`
+
+Optional, with defaults:
+
+- `OPENAI_LIVE_MODEL`, default `gpt-live-1`
+- `OPENAI_LIVE_BACKEND_MODEL`, default `gpt-5.6-luna`
+- `ALLOWED_ORIGINS`, default `http://localhost:5180`
+- `PORT`, default `3010`
+- `RATE_LIMIT_REQUESTS`, default `8`
+- `RATE_LIMIT_WINDOW_MS`, default `60000`
+- `SESSION_BUDGET_REQUESTS`, default `30`
+- `SESSION_BUDGET_WINDOW_MS`, default `3600000`
+- `MAX_OUTPUT_TOKENS`, default `768`, range 16 to 4096
+- `LIFETIME_STREAMS_PER_ORIGIN`, default `4`
+
+`MAX_OUTPUT_TOKENS` caps delegated Responses output, not spoken audio.
+
+Run `pnpm dev:server`. Production builds use:
 
 ```bash
 pnpm --filter @jarvis-viz/server build

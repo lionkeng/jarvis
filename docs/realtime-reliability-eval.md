@@ -11,7 +11,7 @@ The scoring rules and corpus live in `thoughts/shared/plans/2026-08-20-realtime-
 3. Confirm startup waits for `session.started`. Speak and verify both audible playback and UI action results.
 4. End the conversation and confirm `session.closed` supplies final cumulative voice seconds. A dropped connection or timeout leaves final usage unconfirmed.
 
-The historical Realtime baseline and corpus remain unchanged for comparison. Live does not accept the old tracing, VAD, speed, or truncation settings. Record both model IDs, pacing preferences, spoken captions, backend events, action results, and usage for each Live trial.
+The historical baseline and corpus remain unchanged for comparison. Record both model IDs, pacing preferences, spoken captions, backend events, action results, and usage for each Live trial.
 
 Check overlapping speech without cancelling backend actions, late caption fragments, duplicate function items, failures, and reconnects. Backend text must not appear as spoken captions. Score short acknowledgements from actual speech; prompt instructions cannot guarantee exact length or silence.
 

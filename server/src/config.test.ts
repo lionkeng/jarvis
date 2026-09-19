@@ -22,10 +22,10 @@ describe("readConfig", () => {
     expect(() => readConfig({ OPENAI_API_KEY: "key", LIFETIME_STREAMS_PER_ORIGIN: "0" })).toThrow("LIFETIME_STREAMS_PER_ORIGIN");
   });
 
-  test("configures the backend independently and ignores old Realtime settings", () => {
-    const config = readConfig({ OPENAI_API_KEY: "key", OPENAI_REALTIME_MODEL: "old", OPENAI_REALTIME_TRACING: "true" });
-    expect(config.model).toBe("gpt-live-1");
-    expect(config.backendModel).toBe("gpt-5.6-luna");
+  test("reads Live model and backend settings independently", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key" }).model).toBe("gpt-live-1");
+    expect(readConfig({ OPENAI_API_KEY: "key" }).backendModel).toBe("gpt-5.6-luna");
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_LIVE_MODEL: "gpt-live-custom" }).model).toBe("gpt-live-custom");
     expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_LIVE_BACKEND_MODEL: "gpt-5.6-terra" }).backendModel).toBe("gpt-5.6-terra");
     expect(() => readConfig({ OPENAI_API_KEY: "key", MAX_OUTPUT_TOKENS: "15" })).toThrow("at least 16");
   });
