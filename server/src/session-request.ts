@@ -1,6 +1,6 @@
 import { parseSessionPreferences, type SessionPreferences } from "./session-preferences.js";
 
-export const LIVE_PROTOCOLS = ["openai-live"] as const;
+export const LIVE_PROTOCOLS = ["openai-live", "gemini-live"] as const;
 
 export type ProtocolId = typeof LIVE_PROTOCOLS[number];
 
@@ -10,7 +10,12 @@ export interface OpenAILiveRequest {
   preferences: SessionPreferences;
 }
 
-export type SessionRequest = OpenAILiveRequest;
+export interface GeminiLiveRequest {
+  protocol: "gemini-live";
+  preferences: SessionPreferences;
+}
+
+export type SessionRequest = OpenAILiveRequest | GeminiLiveRequest;
 
 export function parseSessionRequest(body: unknown): SessionRequest {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("A session request must be an object");
@@ -20,6 +25,8 @@ export function parseSessionRequest(body: unknown): SessionRequest {
   switch (protocol) {
     case "openai-live":
       return { protocol, sdp: offerSdp(candidate.sdp), preferences };
+    case "gemini-live":
+      return { protocol, preferences };
   }
 }
 

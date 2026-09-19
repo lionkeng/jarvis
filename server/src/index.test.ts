@@ -3,9 +3,10 @@ import type { ServerConfig } from "./config.js";
 import { createServer } from "./index.js";
 
 const baseConfig: ServerConfig = {
-  apiKey: "test-only", model: "gpt-live-1", allowedOrigins: ["http://localhost:5180"], port: 30_000,
+  providers: [{ protocol: "openai-live", apiKey: "test-only", model: "gpt-live-1", backendModel: "gpt-5.6-luna", maxOutputTokens: 128 }],
+  allowedOrigins: ["http://localhost:5180"], port: 30_000,
   rateLimitRequests: 2, rateLimitWindowMs: 1000, sessionBudgetRequests: 2, sessionBudgetWindowMs: 1000,
-  maxOutputTokens: 128, backendModel: "gpt-5.6-luna", lifetimeStreamsPerOrigin: 4,
+  lifetimeStreamsPerOrigin: 4,
 };
 
 test("serves with an idle timeout longer than the lifetime heartbeat", () => {

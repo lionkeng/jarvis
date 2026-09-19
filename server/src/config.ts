@@ -1,14 +1,31 @@
-export interface ServerConfig {
+import { LIVE_PROTOCOLS, type ProtocolId } from "./session-request.js";
+
+export const GEMINI_LIVE_MODELS = ["gemini-3.8-live", "gemini-3.8-live-extended-thinking"] as const;
+
+export interface OpenAIProviderConfig {
+  protocol: "openai-live";
   apiKey: string;
   model: string;
+  backendModel: string;
+  maxOutputTokens: number;
+}
+
+export interface GeminiProviderConfig {
+  protocol: "gemini-live";
+  apiKey: string;
+  model: string;
+}
+
+export type LiveProviderConfig = OpenAIProviderConfig | GeminiProviderConfig;
+
+export interface ServerConfig {
+  providers: [LiveProviderConfig, ...LiveProviderConfig[]];
   allowedOrigins: string[];
   port: number;
   rateLimitRequests: number;
   rateLimitWindowMs: number;
   sessionBudgetRequests: number;
   sessionBudgetWindowMs: number;
-  maxOutputTokens: number;
-  backendModel: string;
   lifetimeStreamsPerOrigin: number;
 }
 
@@ -32,22 +49,67 @@ function allowedOrigins(value: string | undefined): string[] {
   });
 }
 
-export function readConfig(env: Record<string, string | undefined> = Bun.env): ServerConfig {
-  const apiKey = env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+function geminiModel(value: string | undefined): string {
+  const model = value?.trim() || GEMINI_LIVE_MODELS[0];
+  if (!GEMINI_LIVE_MODELS.includes(model as typeof GEMINI_LIVE_MODELS[number])) {
+    throw new Error(`GEMINI_LIVE_MODEL must be one of ${GEMINI_LIVE_MODELS.join(", ")}`);
+  }
+  return model;
+}
+
+function keyedProviders(env: Record<string, string | undefined>): Map<ProtocolId, LiveProviderConfig> {
+  if (env.GEMINI_LIVE_BACKEND_MODEL?.trim()) {
+    throw new Error("GEMINI_LIVE_BACKEND_MODEL is not supported because Gemini Live has no delegation protocol");
+  }
   const maxOutputTokens = positiveInteger("MAX_OUTPUT_TOKENS", env.MAX_OUTPUT_TOKENS, 768, 4_096);
   if (maxOutputTokens < 16) throw new Error("MAX_OUTPUT_TOKENS must be at least 16");
+  const keyed = new Map<ProtocolId, LiveProviderConfig>();
+  const openAIKey = env.OPENAI_API_KEY?.trim();
+  if (openAIKey) {
+    keyed.set("openai-live", {
+      protocol: "openai-live",
+      apiKey: openAIKey,
+      model: env.OPENAI_LIVE_MODEL?.trim() || "gpt-live-1",
+      backendModel: env.OPENAI_LIVE_BACKEND_MODEL?.trim() || "gpt-5.6-luna",
+      maxOutputTokens,
+    });
+  }
+  const geminiKey = env.GEMINI_API_KEY?.trim();
+  if (geminiKey) keyed.set("gemini-live", { protocol: "gemini-live", apiKey: geminiKey, model: geminiModel(env.GEMINI_LIVE_MODEL) });
+  return keyed;
+}
+
+function orderedProviders(requested: string, keyed: Map<ProtocolId, LiveProviderConfig>): LiveProviderConfig[] {
+  const seen = new Set<ProtocolId>();
+  return requested.split(",").map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+    if (!LIVE_PROTOCOLS.includes(entry as ProtocolId)) throw new Error(`LIVE_PROVIDERS names an unknown live protocol: ${entry}`);
+    const protocol = entry as ProtocolId;
+    if (seen.has(protocol)) throw new Error(`LIVE_PROVIDERS lists ${protocol} more than once`);
+    seen.add(protocol);
+    const provider = keyed.get(protocol);
+    if (!provider) throw new Error(`LIVE_PROVIDERS names ${protocol} but its API key is not configured`);
+    return provider;
+  });
+}
+
+function liveProviders(env: Record<string, string | undefined>): [LiveProviderConfig, ...LiveProviderConfig[]] {
+  const keyed = keyedProviders(env);
+  const requested = env.LIVE_PROVIDERS?.trim();
+  const ordered = requested ? orderedProviders(requested, keyed) : [...keyed.values()];
+  const [first, ...rest] = ordered;
+  if (!first) throw new Error("At least one live provider key is required: set OPENAI_API_KEY or GEMINI_API_KEY");
+  return [first, ...rest];
+}
+
+export function readConfig(env: Record<string, string | undefined> = Bun.env): ServerConfig {
   return {
-    apiKey,
-    model: env.OPENAI_LIVE_MODEL?.trim() || "gpt-live-1",
+    providers: liveProviders(env),
     allowedOrigins: allowedOrigins(env.ALLOWED_ORIGINS),
     port: positiveInteger("PORT", env.PORT, 3010, 65_535),
     rateLimitRequests: positiveInteger("RATE_LIMIT_REQUESTS", env.RATE_LIMIT_REQUESTS, 8),
     rateLimitWindowMs: positiveInteger("RATE_LIMIT_WINDOW_MS", env.RATE_LIMIT_WINDOW_MS, 60_000),
     sessionBudgetRequests: positiveInteger("SESSION_BUDGET_REQUESTS", env.SESSION_BUDGET_REQUESTS, 30),
     sessionBudgetWindowMs: positiveInteger("SESSION_BUDGET_WINDOW_MS", env.SESSION_BUDGET_WINDOW_MS, 3_600_000),
-    maxOutputTokens,
-    backendModel: env.OPENAI_LIVE_BACKEND_MODEL?.trim() || "gpt-5.6-luna",
     lifetimeStreamsPerOrigin: positiveInteger("LIFETIME_STREAMS_PER_ORIGIN", env.LIFETIME_STREAMS_PER_ORIGIN, 4),
   };
 }

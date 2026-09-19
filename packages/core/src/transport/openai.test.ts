@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { normalizeOpenAIEvent, OpenAILiveTransport, parseLiveSession } from "./openai.js";
+import { LiveTransport } from "./live-transport.js";
+import { normalizeOpenAIEvent, parseLiveSession } from "./openai.js";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -52,7 +53,7 @@ function stubConnection(autoStart = true) {
   const lease = brokerLease();
   const fetcher = vi.fn(async (_input, init: RequestInit | undefined) => init?.method === "GET" ? lease.response : Response.json(answer, { status: 201 }));
   vi.stubGlobal("fetch", fetcher);
-  const transport = new OpenAILiveTransport();
+  const transport = new LiveTransport({ protocol: "openai-live" });
   const close = async () => { const done = transport.disconnect(); deliver({ type: "session.closed", usage: { seconds: 4 }, reason: "close_requested" }); await done; };
   const backend = (event: unknown, delegation = "delegation_1") => deliver({ type: "response.event", delegation_id: delegation, event });
   const call = (id: string) => backend({ type: "response.output_item.done", item: { type: "function_call", call_id: id, name: "perform_ui_actions", arguments: "{}" } });
@@ -103,7 +104,7 @@ function stubMultipleConnections() {
     leases.push(lease);
     return lease.response;
   }));
-  return { transport: new OpenAILiveTransport(), peers, leases };
+  return { transport: new LiveTransport({ protocol: "openai-live" }), peers, leases };
 }
 
 describe("Live events", () => {
@@ -317,7 +318,7 @@ describe("Live connection", () => {
     const lease = brokerLease();
     const fetcher = vi.fn(async () => lease.response);
     vi.stubGlobal("fetch", fetcher);
-    const transport = new OpenAILiveTransport();
+    const transport = new LiveTransport({ protocol: "openai-live" });
     const connecting = transport.connect("/session");
     await vi.waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce());
     await transport.disconnect();

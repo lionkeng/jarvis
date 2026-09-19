@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { OpenAILiveTransport } from '../packages/core/dist/transport/openai.js';
+import { LiveTransport } from '../packages/core/dist/transport/live-transport.js';
 const nativeFetch = globalThis.fetch;
 globalThis.fetch = (url, init) => nativeFetch(url, { ...init, headers: { ...init?.headers, Origin: 'http://localhost:5180' } });
 let failed = false;
@@ -41,7 +41,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGKILL']) {
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {
       mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { stopped = true; } }] }) },
     } });
-    transport = new OpenAILiveTransport();
+    transport = new LiveTransport();
     await transport.connect(new URL('session', base).href);
     if (signal === 'SIGINT') {
       await delay(17_000);
