@@ -27,7 +27,7 @@ export async function createGeminiLiveGrant(apiKey: string, policy: GeminiSessio
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
   const issuedAt = now();
   const expiresAt = new Date(issuedAt + SESSION_LIFETIME_MS).toISOString();
-  const setup = liveSetup(policy);
+  const locked = lockedSetup(policy);
   const response = await fetcher(AUTH_TOKEN_URL, {
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
@@ -36,7 +36,8 @@ export async function createGeminiLiveGrant(apiKey: string, policy: GeminiSessio
       uses: 1,
       expireTime: expiresAt,
       newSessionExpireTime: new Date(issuedAt + NEW_SESSION_LIFETIME_MS).toISOString(),
-      bidiGenerateContentSetup: setup,
+      fieldMask: Object.keys(locked).join(","),
+      bidiGenerateContentSetup: locked,
     }),
   });
   if (!response.ok) throw new Error(`Gemini auth token request failed with status ${response.status}`);
@@ -44,10 +45,10 @@ export async function createGeminiLiveGrant(apiKey: string, policy: GeminiSessio
   if (!payload || typeof payload !== "object" || !("name" in payload) || typeof payload.name !== "string" || !payload.name.trim()) {
     throw new Error("Invalid Gemini auth token response");
   }
-  return { kind: "websocket-token", endpoint: LIVE_ENDPOINT, token: payload.name, setup: { setup }, expiresAt };
+  return { kind: "websocket-token", endpoint: LIVE_ENDPOINT, token: payload.name, setup: { setup: { ...locked, sessionResumption: {} } }, expiresAt };
 }
 
-function liveSetup(policy: GeminiSessionPolicy): Record<string, unknown> {
+function lockedSetup(policy: GeminiSessionPolicy): Record<string, unknown> {
   const extended = policy.model === GEMINI_EXTENDED_MODEL;
   const rendering = renderGeminiPolicy(policy.preferences, extended);
   const generationConfig: Record<string, unknown> = {
@@ -62,7 +63,6 @@ function liveSetup(policy: GeminiSessionPolicy): Record<string, unknown> {
     tools: [{ functionDeclarations: rendering.functionDeclarations }],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    sessionResumption: {},
     contextWindowCompression: { slidingWindow: {} },
   };
 }

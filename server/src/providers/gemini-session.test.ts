@@ -6,6 +6,8 @@ const preferences = { responseTiming: "natural", speechRate: 1 } as const;
 const now = () => Date.parse("2026-09-19T12:00:00.000Z");
 const minted = { name: "auth_tokens/abc123" };
 
+const LOCKED_FIELDS = "model,generationConfig,systemInstruction,tools,inputAudioTranscription,outputAudioTranscription,contextWindowCompression";
+
 interface BoundSetup {
   model: string;
   generationConfig: { responseModalities: string[]; speechConfig: unknown; thinkingConfig?: unknown };
@@ -13,8 +15,8 @@ interface BoundSetup {
   tools: { functionDeclarations: { name: string; behavior?: string }[] }[];
   inputAudioTranscription: unknown;
   outputAudioTranscription: unknown;
-  sessionResumption: unknown;
   contextWindowCompression: unknown;
+  sessionResumption?: unknown;
 }
 
 interface Mint {
@@ -30,7 +32,7 @@ async function mint(model: string, apiKey = "gemini-key") {
     return Response.json(minted);
   }, now);
   if (!sent) throw new Error("the issuer never called the fetcher");
-  return { sent, grant, setup: sent.body.bidiGenerateContentSetup as BoundSetup };
+  return { sent, grant, locked: sent.body.bidiGenerateContentSetup as BoundSetup };
 }
 
 async function rejection(promise: Promise<unknown>): Promise<string> {
@@ -44,12 +46,27 @@ async function rejection(promise: Promise<unknown>): Promise<string> {
 
 describe("createGeminiLiveGrant", () => {
   test("mints a single-use token bound to the model and the full setup", async () => {
-    const { sent, setup } = await mint("gemini-3.8-live");
+    const { sent, locked } = await mint("gemini-3.8-live");
     expect(sent.url).toBe("https://generativelanguage.googleapis.com/v1beta/auth_tokens");
     expect(sent.body.uses).toBe(1);
     expect(sent.body.expireTime).toBe("2026-09-19T12:30:00.000Z");
     expect(sent.body.newSessionExpireTime).toBe("2026-09-19T12:01:00.000Z");
-    expect(setup.model).toBe("models/gemini-3.8-live");
+    expect(locked.model).toBe("models/gemini-3.8-live");
+  });
+
+  test("locks exactly the seven masked fields and leaves resumption to the browser", async () => {
+    const { sent, locked } = await mint("gemini-3.8-live");
+    expect(sent.body.fieldMask).toBe(LOCKED_FIELDS);
+    expect(Object.keys(locked)).not.toContain("sessionResumption");
+    expect(locked.sessionResumption).toBeUndefined();
+  });
+
+  test("keeps the field mask and the locked fields from drifting apart", async () => {
+    const { sent, locked } = await mint("gemini-3.8-live-extended-thinking");
+    const masked = String(sent.body.fieldMask).split(",");
+    expect(masked).toEqual(Object.keys(locked));
+    for (const key of Object.keys(locked)) expect(masked).toContain(key);
+    for (const key of masked) expect(Object.keys(locked)).toContain(key);
   });
 
   test("sends the key in a header and never in the URL or the body", async () => {
@@ -59,30 +76,29 @@ describe("createGeminiLiveGrant", () => {
     expect(JSON.stringify(sent.body)).not.toContain("super-secret");
   });
 
-  test("binds transcription, the fixed voice, resumption and sliding-window compression", async () => {
-    const { setup } = await mint("gemini-3.8-live");
-    expect(setup.inputAudioTranscription).toEqual({});
-    expect(setup.outputAudioTranscription).toEqual({});
-    expect(setup.sessionResumption).toEqual({});
-    expect(setup.contextWindowCompression).toEqual({ slidingWindow: {} });
-    expect(setup.generationConfig.responseModalities).toEqual(["AUDIO"]);
-    expect(setup.generationConfig.speechConfig).toEqual({ voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } });
-    expect(setup.systemInstruction.parts[0]?.text).toContain("perform_ui_actions");
-    expect(setup.tools[0]?.functionDeclarations[0]?.name).toBe("perform_ui_actions");
+  test("binds transcription, the fixed voice and sliding-window compression", async () => {
+    const { locked } = await mint("gemini-3.8-live");
+    expect(locked.inputAudioTranscription).toEqual({});
+    expect(locked.outputAudioTranscription).toEqual({});
+    expect(locked.contextWindowCompression).toEqual({ slidingWindow: {} });
+    expect(locked.generationConfig.responseModalities).toEqual(["AUDIO"]);
+    expect(locked.generationConfig.speechConfig).toEqual({ voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } });
+    expect(locked.systemInstruction.parts[0]?.text).toContain("perform_ui_actions");
+    expect(locked.tools[0]?.functionDeclarations[0]?.name).toBe("perform_ui_actions");
   });
 
   test("adds thinkingLevel and NON_BLOCKING only on the extended model", async () => {
     const standard = await mint("gemini-3.8-live");
-    expect(standard.setup.generationConfig.thinkingConfig).toBeUndefined();
-    expect(standard.setup.tools[0]?.functionDeclarations[0]?.behavior).toBeUndefined();
+    expect(standard.locked.generationConfig.thinkingConfig).toBeUndefined();
+    expect(standard.locked.tools[0]?.functionDeclarations[0]?.behavior).toBeUndefined();
 
     const extended = await mint("gemini-3.8-live-extended-thinking");
-    expect(extended.setup.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "LOW" });
-    expect(extended.setup.tools[0]?.functionDeclarations[0]?.behavior).toBe("NON_BLOCKING");
+    expect(extended.locked.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "LOW" });
+    expect(extended.locked.tools[0]?.functionDeclarations[0]?.behavior).toBe("NON_BLOCKING");
   });
 
   test("returns the websocket-token grant the browser dials", async () => {
-    const { grant, setup } = await mint("gemini-3.8-live");
+    const { grant } = await mint("gemini-3.8-live");
     expect(Object.keys(grant).sort()).toEqual(Object.keys(GEMINI_GRANT).sort());
     expect(grant.kind).toBe(GEMINI_GRANT.kind);
     expect(grant.token).toBe("auth_tokens/abc123");
@@ -90,7 +106,13 @@ describe("createGeminiLiveGrant", () => {
     expect(grant.endpoint.startsWith("wss://generativelanguage.googleapis.com/ws/")).toBe(true);
     expect(grant.endpoint).toContain("BidiGenerateContentConstrained");
     expect(grant.endpoint).not.toContain("?");
-    expect(grant.setup).toEqual({ setup: setup as unknown as Record<string, unknown> });
+  });
+
+  test("switches resumption on in the browser setup frame and changes nothing else", async () => {
+    const { grant, locked } = await mint("gemini-3.8-live");
+    const { sessionResumption, ...rest } = grant.setup.setup;
+    expect(sessionResumption).toEqual({});
+    expect(rest).toEqual(locked as unknown as Record<string, unknown>);
   });
 
   test("rejects a blank key and a failed mint without leaking the key", async () => {

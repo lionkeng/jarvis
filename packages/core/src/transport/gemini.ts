@@ -7,6 +7,8 @@ import type { NormalizedRealtimeEvent, RealtimeToolResult } from "./types.js";
 const OPEN = 1;
 const SETUP_TIMEOUT_MS = 15_000;
 const CLOSE_TIMEOUT_MS = 2_000;
+const RECONNECT_FLOOR_MS = 10_000;
+const FATAL_CLOSE_CODES: readonly number[] = [1007, 1008];
 
 export class GeminiToolTurn {
   readonly #pending = new Map<string, string>();
@@ -52,7 +54,7 @@ export class GeminiLiveChannel implements LiveChannel {
   readonly #events = new AbortController();
   readonly #tools = new GeminiToolTurn();
   readonly #sockets = new Set<WebSocket>();
-  readonly #dialing = new Map<WebSocket, { ready: () => void; failed: (error: Error) => void }>();
+  readonly #dialing = new Map<WebSocket, { ready: () => void; failed: (error: Error) => void; resumed: boolean }>();
   #host: LiveChannelHost | undefined;
   #grant: WebsocketTokenGrant | undefined;
   #audio: PcmDuplex | undefined;
@@ -62,8 +64,11 @@ export class GeminiLiveChannel implements LiveChannel {
   #heard = "";
   #spoke = false;
   #told = false;
+  #running = false;
   #released = false;
   #resuming = false;
+  #resumed = false;
+  #adoptedAt = 0;
   #expiry: ReturnType<typeof setTimeout> | undefined;
   #closeTimer: ReturnType<typeof setTimeout> | undefined;
   #closing: Promise<void> | undefined;
@@ -90,11 +95,11 @@ export class GeminiLiveChannel implements LiveChannel {
       throw error;
     }
     this.#audio = audio;
-    await this.#dial(undefined);
+    await this.#dial(undefined, false);
     host.guard();
-    this.#expiry = setTimeout(() => this.#fail(new Error("Live session token expired; final session usage is unconfirmed")), Math.max(0, grant.expiresAt - Date.now()));
+    this.#arm(grant);
     host.emit({ type: "agent-track", stream: audio.stream, track: audio.track, continuous: true });
-    host.started();
+    this.#running = host.started();
   }
 
   submitToolResult(result: RealtimeToolResult): void {
@@ -134,16 +139,16 @@ export class GeminiLiveChannel implements LiveChannel {
     this.#settle();
   }
 
-  async #dial(handle: string | undefined): Promise<WebSocket> {
+  async #dial(handle: string | undefined, resumed: boolean): Promise<WebSocket> {
     const grant = this.#grant;
-    if (!grant || this.#released) throw new Error("Live connection cancelled");
+    if (!grant || this.#released || this.#closing) throw new Error("Live connection cancelled");
     const socket = new WebSocket(`${grant.endpoint}?access_token=${encodeURIComponent(grant.token)}`);
     socket.binaryType = "arraybuffer";
     this.#sockets.add(socket);
     let ready: () => void = () => undefined;
     let failed: (error: Error) => void = () => undefined;
     const opened = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
-    this.#dialing.set(socket, { ready, failed });
+    this.#dialing.set(socket, { ready, failed, resumed });
     const options = { signal: this.#events.signal };
     socket.addEventListener("open", () => {
       try { socket.send(JSON.stringify(setupFrame(grant.setup, handle))); }
@@ -174,6 +179,8 @@ export class GeminiLiveChannel implements LiveChannel {
     if (this.#released || this.#closing) { shut(socket); return; }
     const previous = this.#socket;
     this.#socket = socket;
+    this.#resumed = dial.resumed;
+    this.#adoptedAt = Date.now();
     if (previous && previous !== socket) {
       this.#sockets.delete(previous);
       shut(previous);
@@ -257,19 +264,36 @@ export class GeminiLiveChannel implements LiveChannel {
 
   #resume(): void {
     if (this.#resuming || this.#released || this.#closing) return;
-    this.#resuming = true;
     const handle = this.#handle;
     if (handle === undefined) {
       this.#fail(new Error("Live session ended without a resumable handle; final session usage is unconfirmed"));
       return;
     }
-    void this.#dial(handle).then(
+    this.#resuming = true;
+    this.#tools.clear();
+    void this.#reconnect(handle).then(
       () => { this.#resuming = false; },
       (error: unknown) => {
         this.#resuming = false;
         this.#fail(error instanceof Error ? error : new Error(String(error)));
       },
     );
+  }
+
+  async #reconnect(handle: string): Promise<void> {
+    const host = this.#host;
+    if (!host) throw new Error("Live connection cancelled");
+    const grant = await host.grant();
+    if (this.#released || this.#closing) return;
+    if (grant.kind !== "websocket-token") throw new Error("Session endpoint returned an invalid Live session");
+    this.#grant = grant;
+    this.#arm(grant);
+    await this.#dial(handle, true);
+  }
+
+  #arm(grant: WebsocketTokenGrant): void {
+    clearTimeout(this.#expiry);
+    this.#expiry = setTimeout(() => this.#fail(new Error("Live session token expired; final session usage is unconfirmed")), Math.max(0, grant.expiresAt - Date.now()));
   }
 
   #speak(pcm16: ArrayBuffer, sampleRate: number): void {
@@ -288,11 +312,17 @@ export class GeminiLiveChannel implements LiveChannel {
     this.#socket = undefined;
     if (this.#closing) { this.#settle(); return; }
     if (this.#resuming) return;
+    if (this.#running && this.#recoverable(code)) { this.#resume(); return; }
     this.#fail(new Error(lost(`Live connection lost with code ${code}`, reason)));
   }
 
+  #recoverable(code: number): boolean {
+    if (FATAL_CLOSE_CODES.includes(code) || this.#handle === undefined) return false;
+    return !this.#resumed || Date.now() - this.#adoptedAt >= RECONNECT_FLOOR_MS;
+  }
+
   #fail(error: Error): void {
-    if (this.#released) return;
+    if (this.#released || this.#closing) return;
     this.#settle();
     this.#host?.ended(error, true);
   }
