@@ -66,6 +66,8 @@ The browser then sends `POST /session` with a flat JSON body. The body carries `
 
 The OpenAI grant keeps today's shape, `{ session, transport }`, with the session ID and the SDP answer. The Gemini grant is `{ kind: "websocket-token", endpoint, token, setup, expiresAt }`.
 
+OpenAI posts once per session. Gemini posts again on every reconnect, because its token is single-use.
+
 ## Choosing a live transport
 
 `createLiveTransport` pins one protocol.
@@ -85,13 +87,27 @@ A host that passes no transport gets the default. The default reads the broker's
 
 ## Gemini live path
 
-The BFF mints one single-use ephemeral token per Gemini session. The token expires after 30 minutes and has 1 minute to start a session. Google binds it to the model and to the full setup, so the browser cannot change the tools, the system instruction, the voice, or transcription.
+The BFF mints one single-use ephemeral token per Gemini connection. The token expires after 30 minutes and has 1 minute to start a session. Google locks the model and every setup field the token's field mask names. The browser cannot change the tools, the system instruction, the voice, or transcription. `sessionResumption` is the one setup field the mask leaves open, which is how the browser carries its resumption handle into a new connection.
 
 The browser then opens the WebSocket to Google itself. The BFF never sees conversation audio, transcripts, or tool calls, and `GEMINI_API_KEY` stays in the Bun process.
 
 Audio is 16-bit PCM. Capture runs at 16 kHz and playback at 24 kHz. A browser that refuses a 16 kHz capture context falls back to the device rate, and each audio frame states the rate it carries. Agent audio plays into a `MediaStream` that `VoiceViz` monitors, so it never reaches the speakers a second time. When Google reports an interruption, the channel clears queued playback at once.
 
-Google closes each connection after about 10 minutes and announces it with `goAway`. The channel opens a new socket with the session resumption handle and emits no `disconnected` event. Context window compression is on, so the 30 minute token expiry is the session limit. At expiry the session ends with an error and the browser does not mint a new token.
+Google closes each connection after about 10 minutes. Google's documentation describes a `goAway` message before the close. In live runs the connection closed with code 1011 and no `goAway`. The channel reconnects on either signal.
+
+A reconnect asks the broker for a fresh grant, then dials with the new token and the latest resumption handle. A single-use token cannot open a second connection, so every reconnect is another `POST /session`. The reconnect keeps the same agent audio stream and emits no `disconnected` and no second `connected`. It drops pending tool calls.
+
+That second POST passes the origin guard, the rate limit, and the per-origin session budget, and spends one slot of each. A long Gemini session therefore draws down the session budget as it runs. Size `SESSION_BUDGET_REQUESTS` for roughly one reconnect every 10 minutes per live session.
+
+The channel fails closed instead of reconnecting when:
+
+- no resumable handle exists
+- the close code is 1007 or 1008
+- the new grant fails, including a 429 from the broker
+- the dial fails
+- a reconnected socket closes within 10 seconds of its own setup
+
+Each grant expires 30 minutes after the BFF mints it, and the expiry timer follows the newest grant. A reconnect therefore extends the session. The locked setup keeps sliding-window context compression on, so a long conversation does not end on context length.
 
 ## Core usage
 
@@ -112,7 +128,7 @@ await viz.disconnect();
 viz.unmount();
 ```
 
-On OpenAI the browser sends its SDP offer to the BFF and receives only a session ID and SDP answer. On Gemini it receives only an endpoint, a single-use token, the bound setup, and an expiry. Never expose `OPENAI_API_KEY` or `GEMINI_API_KEY` to the demo or any consuming application.
+On OpenAI the browser sends its SDP offer to the BFF and receives only a session ID and SDP answer. On Gemini it receives only an endpoint, a single-use token, the locked setup, and an expiry. Never expose `OPENAI_API_KEY` or `GEMINI_API_KEY` to the demo or any consuming application.
 
 ## React usage
 

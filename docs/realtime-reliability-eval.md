@@ -28,6 +28,8 @@ Several recorded fields apply to OpenAI trials only. Gemini has no backend model
 
 Gemini drops its pending function calls when Google reports an interruption. The browser still runs the capability, and the channel then discards the result instead of sending it. Record that trial as interrupted and do not classify it as a reporting failure.
 
+A Gemini connection lasts about 10 minutes, then the channel reconnects on its own. The conversation continues, and the demo shows no disconnect. Each reconnect posts to `/session` again and spends one session-budget slot, so raise `SESSION_BUDGET_REQUESTS` before a long corpus run. A reconnect also drops pending function calls, so repeat any trial that straddles one.
+
 ## Reset UI state between independent trials
 
 Reset the hash route to `#/dashboard` and restore the demo model to its starting theme, library selection, details-panel, bookmark, and scroll positions. Independent trials need a fresh UI even when you keep the same Live connection. Fresh-session cases also need a new Live connection.
