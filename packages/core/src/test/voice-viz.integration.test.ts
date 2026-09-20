@@ -23,6 +23,42 @@ class FakeTransport implements RealtimeTransport {
   emit(event: NormalizedRealtimeEvent): void { for (const listener of this.listeners) listener(event); }
 }
 
+const grant = { session: { id: "live_opaque" }, transport: { type: "webrtc", sdp: "v=0\r\nanswer" } };
+
+function stubLiveWire(ready: string) {
+  const steps: string[] = [];
+  const channel = { readyState: "connecting", send: vi.fn(), close: vi.fn(), addEventListener: vi.fn() };
+  const track = { stop: vi.fn() };
+  class Peer {
+    connectionState = "new";
+    iceGatheringState = "complete";
+    localDescription = { type: "offer", sdp: "v=0\r\nwith-ice" };
+    addEventListener = vi.fn();
+    removeEventListener = vi.fn();
+    addTrack = vi.fn();
+    close = vi.fn();
+    createDataChannel = vi.fn(() => channel);
+    createOffer = vi.fn(async () => ({ type: "offer", sdp: "v=0" }));
+    setLocalDescription = vi.fn();
+    setRemoteDescription = vi.fn(async () => { channel.readyState = "open"; });
+    constructor() { steps.push("peer"); }
+  }
+  vi.stubGlobal("RTCPeerConnection", Peer);
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+  const fetcher = vi.fn(async (_input: unknown, init: RequestInit | undefined) => {
+    if (init?.method !== "GET") {
+      steps.push("grant");
+      return Response.json(grant, { status: 201 });
+    }
+    steps.push("lease");
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(`event: ready\ndata: ${ready}\n\n`)); },
+    }), { headers: { "Content-Type": "text/event-stream" } });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  return { steps, fetcher, track };
+}
+
 describe("VoiceViz integration", () => {
   let observerStarts = 0;
   let observerStops = 0;
@@ -47,7 +83,31 @@ describe("VoiceViz integration", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 640, height: 480 } as DOMRect);
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("leases the broker plan before any peer connection when the host supplies no transport", async () => {
+    const live = stubLiveWire('{"protocols":["openai-live"]}');
+    const viz = new VoiceViz({ reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    const connecting = viz.connect("/session", { responseTiming: "fast", speechRate: 1.15 });
+    const cancelled = expect(connecting).rejects.toThrow("cancelled");
+
+    await vi.waitFor(() => expect(live.steps).toEqual(["lease", "peer", "grant"]));
+
+    expect(live.fetcher).toHaveBeenNthCalledWith(1, "/session", expect.objectContaining({
+      method: "GET", headers: { Accept: "text/event-stream" }, cache: "no-store", credentials: "omit",
+    }));
+    expect(JSON.parse(String(live.fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+      protocol: "openai-live", responseTiming: "fast", speechRate: 1.15, sdp: "v=0\r\nwith-ice",
+    });
+
+    await viz.disconnect();
+    await cancelled;
+
+    expect(live.track.stop).toHaveBeenCalledOnce();
+    expect(viz.connected).toBe(false);
+    viz.unmount();
+  });
 
   it("preserves overlapping Live captions without interrupting speech or completing a turn", async () => {
     const transport = new FakeTransport();

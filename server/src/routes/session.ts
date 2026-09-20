@@ -3,7 +3,7 @@ import { SessionBudget } from "../guards/budget.js";
 import { OriginGuard } from "../guards/origin.js";
 import { SlidingWindowLimiter } from "../guards/rate-limit.js";
 import { createOpenAILiveSession, type FetchLike } from "../providers/openai-session.js";
-import { parseSessionPreferences, type SessionPreferences } from "../session-preferences.js";
+import { parseSessionRequest, type SessionRequest } from "../session-request.js";
 
 export interface SessionRouteDependencies {
   config: ServerConfig;
@@ -26,6 +26,18 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
     else openLifetimeStreams.set(origin, open - 1);
   };
 
+  const issueGrant = async (sessionRequest: SessionRequest) => {
+    switch (sessionRequest.protocol) {
+      case "openai-live":
+        return createOpenAILiveSession(config.apiKey, sessionRequest.sdp, {
+          model: config.model,
+          maxOutputTokens: config.maxOutputTokens,
+          backendModel: config.backendModel,
+          preferences: sessionRequest.preferences,
+        }, dependencies.fetcher);
+    }
+  };
+
   return async function sessionRoute(request: Request): Promise<Response> {
     if (request.method === "OPTIONS") {
       const origin = request.headers.get("Origin");
@@ -43,25 +55,15 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, { Allow: "GET, POST, OPTIONS" });
     if (!originGuard.allows(origin)) return json({ error: "Origin is not allowed" }, 403, origin ? corsHeaders(origin) : {});
     if (!rateLimiter.take(origin!)) return json({ error: "Session request rate limit exceeded" }, 429, { "Retry-After": retryAfter(config.rateLimitWindowMs), ...corsHeaders(origin!) });
-    let preferences: SessionPreferences;
-    let sdp: string;
+    let sessionRequest: SessionRequest;
     try {
-      const body = await requestBody(request);
-      if (!body || typeof body !== "object" || !("sdp" in body) || typeof body.sdp !== "string" || !body.sdp.trim()) throw new Error("An SDP offer is required");
-      sdp = body.sdp;
-      preferences = parseSessionPreferences(body);
+      sessionRequest = parseSessionRequest(await requestBody(request));
     } catch {
       return json({ error: "Invalid SDP offer or session preferences" }, 400, corsHeaders(origin!));
     }
     if (!sessionBudget.reserve(origin!)) return json({ error: "Origin session budget exhausted" }, 429, { "Retry-After": retryAfter(config.sessionBudgetWindowMs), ...corsHeaders(origin!) });
     try {
-      const session = await createOpenAILiveSession(config.apiKey, sdp, {
-        model: config.model,
-        maxOutputTokens: config.maxOutputTokens,
-        backendModel: config.backendModel,
-        preferences,
-      }, dependencies.fetcher);
-      return json(session, 201, { "Cache-Control": "no-store", ...corsHeaders(origin!) });
+      return json(await issueGrant(sessionRequest), 201, { "Cache-Control": "no-store", ...corsHeaders(origin!) });
     } catch (error) {
       console.error("Session issuance failed", error instanceof Error ? error.message : String(error));
       return json({ error: "Unable to create a Live session" }, 502, corsHeaders(origin!));
