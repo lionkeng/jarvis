@@ -1,11 +1,58 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProtocolId } from "./broker.js";
+import { GEMINI_GRANT } from "../../../../scripts/fixtures/session-wire.js";
 import { createLiveTransport, LiveTransport } from "./live-transport.js";
 import type { RealtimeTransport } from "./types.js";
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
 const grant = { session: { id: "live_opaque" }, transport: { type: "webrtc", sdp: "v=0\r\nanswer" } };
+
+function stubGemini(protocols: string[]) {
+  const sockets: Array<{ url: string; closed: boolean }> = [];
+  const peers = vi.fn();
+  class Socket {
+    readyState = 0;
+    binaryType = "";
+    readonly record: { url: string; closed: boolean };
+    #listeners = new Map<string, (event: unknown) => void>();
+    constructor(readonly url: string) {
+      this.record = { url, closed: false };
+      sockets.push(this.record);
+      queueMicrotask(() => { this.readyState = 1; this.#listeners.get("open")?.({}); });
+    }
+    addEventListener(name: string, listener: (event: unknown) => void): void { this.#listeners.set(name, listener); }
+    removeEventListener(name: string): void { this.#listeners.delete(name); }
+    send(): void { this.#listeners.get("message")?.({ data: JSON.stringify({ setupComplete: {} }) }); }
+    close(): void { this.record.closed = true; this.readyState = 3; this.#listeners.get("close")?.({ code: 1000 }); }
+  }
+  class Context {
+    sampleRate = 16_000;
+    state = "running";
+    destination = {};
+    audioWorklet = { addModule: vi.fn(async () => undefined) };
+    resume = vi.fn(async () => undefined);
+    close = vi.fn(async () => undefined);
+    createMediaStreamSource = vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() }));
+    createMediaStreamDestination = vi.fn(() => ({ stream: { getAudioTracks: () => [{ stop: vi.fn() }] }, disconnect: vi.fn() }));
+  }
+  const track = { stop: vi.fn() };
+  const getUserMedia = vi.fn(async () => ({ getTracks: () => [track] }));
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("AudioContext", Context);
+  vi.stubGlobal("AudioWorkletNode", class { port = { onmessage: null }; connect = vi.fn(); disconnect = vi.fn(); });
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = vi.fn(() => "blob:jarvis-pcm");
+    static revokeObjectURL = vi.fn();
+  });
+  vi.stubGlobal("WebSocket", Socket);
+  vi.stubGlobal("RTCPeerConnection", class { constructor() { peers(); } });
+  vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init: RequestInit | undefined) => init?.method === "GET"
+    ? new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(`event: ready\ndata: ${JSON.stringify({ protocols })}\n\n`)); },
+    }), { headers: { "Content-Type": "text/event-stream" } })
+    : Response.json({ ...GEMINI_GRANT, expiresAt: new Date(Date.now() + 1_800_000).toISOString() }, { status: 201 })));
+  return { sockets, peers, track, getUserMedia };
+}
 
 function stubLive(ready = "{}") {
   const listeners = new Map<string, (event: { data: string }) => void>();
@@ -68,7 +115,7 @@ describe("Live transport", () => {
 
   it("rejects a pinned protocol the broker does not offer before touching the microphone", async () => {
     const live = stubLive();
-    const transport = createLiveTransport({ protocol: "gemini-live" as unknown as ProtocolId });
+    const transport = createLiveTransport({ protocol: "gemini-live" });
     await expect(transport.connect("/session")).rejects.toThrow("does not offer the gemini-live protocol");
     expect(live.getUserMedia).not.toHaveBeenCalled();
     expect(live.peers).toHaveLength(0);
@@ -108,5 +155,27 @@ describe("Live transport", () => {
     expect(settled).toBe(true);
     expect(transport.connected).toBe(false);
     expect(live.peers[0]!.close).toHaveBeenCalledOnce();
+  });
+
+  it("runs the Gemini channel on a WebSocket without ever building a peer connection", async () => {
+    const live = stubGemini(["openai-live", "gemini-live"]);
+    const transport = createLiveTransport({ protocol: "gemini-live" });
+    await transport.connect("/session");
+    expect(transport.connected).toBe(true);
+    expect(live.peers).not.toHaveBeenCalled();
+    expect(live.sockets[0]?.url).toContain("access_token=");
+    await transport.disconnect();
+    expect(live.sockets[0]?.closed).toBe(true);
+    expect(live.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("picks Gemini for an unpinned transport when the broker offers it alone", async () => {
+    const live = stubGemini(["gemini-live"]);
+    const transport = new LiveTransport();
+    await transport.connect("/session");
+    expect(transport.connected).toBe(true);
+    expect(live.sockets).toHaveLength(1);
+    expect(live.peers).not.toHaveBeenCalled();
+    await transport.disconnect();
   });
 });

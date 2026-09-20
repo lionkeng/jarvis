@@ -1,13 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { LEGACY_POST_BODY, OPENAI_GRANT } from "../../../scripts/fixtures/session-wire.js";
+import { GEMINI_GRANT, GEMINI_POST_BODY, LEGACY_POST_BODY, OPENAI_GRANT, READY_PLAN_PAYLOAD } from "../../../scripts/fixtures/session-wire.js";
 import { createSessionRoute } from "./session.js";
-import type { ServerConfig } from "../config.js";
+import type { LiveProviderConfig, ServerConfig } from "../config.js";
 
+const openAIProvider: LiveProviderConfig = { protocol: "openai-live", apiKey: "test-key", model: "gpt-live-1", backendModel: "gpt-5.6-luna", maxOutputTokens: 512 };
+const geminiProvider: LiveProviderConfig = { protocol: "gemini-live", apiKey: "gemini-key", model: "gemini-3.8-live" };
 const config: ServerConfig = {
-  apiKey: "test-key", model: "gpt-live-1", allowedOrigins: ["https://voice.example"], port: 3010,
+  providers: [openAIProvider], allowedOrigins: ["https://voice.example"], port: 3010,
   rateLimitRequests: 1, rateLimitWindowMs: 60_000, sessionBudgetRequests: 10, sessionBudgetWindowMs: 3_600_000,
-  maxOutputTokens: 512, backendModel: "gpt-5.6-luna", lifetimeStreamsPerOrigin: 4,
+  lifetimeStreamsPerOrigin: 4,
 };
+const dualConfig: ServerConfig = { ...config, providers: [openAIProvider, geminiProvider] };
+const geminiPost = (body: unknown = GEMINI_POST_BODY) => new Request("http://localhost/session", {
+  method: "POST",
+  headers: { Origin: "https://voice.example", "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
 const lifetimeRequest = (init: RequestInit = {}) => new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" }, ...init });
 const answer = { session: { id: "live_test" }, transport: { type: "webrtc", sdp: "v=0" } };
 const fetcher = async () => Response.json(answer);
@@ -36,7 +44,7 @@ describe("session route", () => {
       expect(response.headers.get("access-control-allow-origin")).toBe("https://voice.example");
       const reader = response.body!.getReader();
       const first = await reader.read();
-      expect(new TextDecoder().decode(first.value)).toBe("event: ready\ndata: {}\n\n");
+      expect(new TextDecoder().decode(first.value)).toBe("event: ready\ndata: {\"protocols\":[\"openai-live\"]}\n\n");
       expect(intervals).toEqual([5_000]);
       await reader.cancel();
       expect(cleared).toEqual([timer]);
@@ -152,6 +160,72 @@ describe("session route", () => {
     }));
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual(OPENAI_GRANT);
+  });
+
+  test("advertises every configured protocol on the ready event", async () => {
+    const route = createSessionRoute({ config: dualConfig, fetcher });
+    const response = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" } }));
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    const payload = new TextDecoder().decode(first.value).replace("event: ready\ndata: ", "").trim();
+    expect(JSON.parse(payload)).toEqual(READY_PLAN_PAYLOAD);
+    await reader.cancel();
+  });
+
+  test("issues a Gemini websocket-token grant for a Gemini POST", async () => {
+    const route = createSessionRoute({ config: dualConfig, fetcher: async () => Response.json({ name: "auth_tokens/route" }) });
+    const response = await route(geminiPost());
+    expect(response.status).toBe(201);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const grant = await response.json() as Record<string, unknown>;
+    expect(Object.keys(grant).sort()).toEqual(Object.keys(GEMINI_GRANT).sort());
+    expect(grant.kind).toBe(GEMINI_GRANT.kind);
+    expect(grant.token).toBe("auth_tokens/route");
+  });
+
+  test("mints the Gemini token with the server-held key and never the request body", async () => {
+    let mint: { url: string; headers: Headers; body: string } | undefined;
+    const route = createSessionRoute({
+      config: dualConfig,
+      fetcher: async (url, init) => {
+        mint = { url: String(url), headers: new Headers(init?.headers), body: String(init?.body) };
+        return Response.json({ name: "auth_tokens/route" });
+      },
+    });
+    const response = await route(geminiPost({ ...GEMINI_POST_BODY, model: "untrusted", apiKey: "untrusted" }));
+    expect(response.status).toBe(201);
+    expect(mint?.headers.get("x-goog-api-key")).toBe("gemini-key");
+    expect(mint?.url).toContain("/v1beta/auth_tokens");
+    expect(mint?.body).toContain("models/gemini-3.8-live");
+    expect(mint?.body).not.toContain("untrusted");
+  });
+
+  test("rejects a Gemini POST on an OpenAI-only config before calling any provider", async () => {
+    let called = false;
+    const route = createSessionRoute({ config, fetcher: async () => { called = true; return Response.json(answer); } });
+    const response = await route(geminiPost());
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid SDP offer or session preferences" });
+    expect(called).toBe(false);
+  });
+
+  test("charges the Gemini protocol against the same rate window", async () => {
+    const route = createSessionRoute({ config: dualConfig, fetcher: async () => Response.json({ name: "auth_tokens/route" }) });
+    expect((await route(geminiPost())).status).toBe(201);
+    const limited = await route(geminiPost());
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+  });
+
+  test("charges the Gemini protocol against the same session budget", async () => {
+    const route = createSessionRoute({
+      config: { ...dualConfig, rateLimitRequests: 10, sessionBudgetRequests: 1 },
+      fetcher: async () => Response.json({ name: "auth_tokens/route" }),
+    });
+    expect((await route(geminiPost())).status).toBe(201);
+    const exhausted = await route(geminiPost());
+    expect(exhausted.status).toBe(429);
+    expect(await exhausted.json()).toEqual({ error: "Origin session budget exhausted" });
   });
 
   test("creates sessions for other loopback origins when localhost is configured", async () => {

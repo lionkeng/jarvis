@@ -1,9 +1,12 @@
-import type { ServerConfig } from "../config.js";
+import type { LiveProviderConfig, ServerConfig } from "../config.js";
 import { SessionBudget } from "../guards/budget.js";
 import { OriginGuard } from "../guards/origin.js";
 import { SlidingWindowLimiter } from "../guards/rate-limit.js";
-import { createOpenAILiveSession, type FetchLike } from "../providers/openai-session.js";
-import { parseSessionRequest, type SessionRequest } from "../session-request.js";
+import { createGeminiLiveGrant, type LiveTokenGrant } from "../providers/gemini-session.js";
+import { createOpenAILiveSession, type FetchLike, type LiveSessionResponse } from "../providers/openai-session.js";
+import { parseSessionRequest, type ProtocolId, type SessionRequest } from "../session-request.js";
+
+export type LiveGrant = LiveSessionResponse | LiveTokenGrant;
 
 export interface SessionRouteDependencies {
   config: ServerConfig;
@@ -26,15 +29,29 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
     else openLifetimeStreams.set(origin, open - 1);
   };
 
-  const issueGrant = async (sessionRequest: SessionRequest) => {
+  const providerFor = <P extends ProtocolId>(protocol: P): Extract<LiveProviderConfig, { protocol: P }> => {
+    const provider = config.providers.find((candidate) => candidate.protocol === protocol);
+    if (!provider) throw new Error(`No live provider is configured for ${protocol}`);
+    return provider as Extract<LiveProviderConfig, { protocol: P }>;
+  };
+
+  const issueGrant = (sessionRequest: SessionRequest): () => Promise<LiveGrant> => {
     switch (sessionRequest.protocol) {
-      case "openai-live":
-        return createOpenAILiveSession(config.apiKey, sessionRequest.sdp, {
-          model: config.model,
-          maxOutputTokens: config.maxOutputTokens,
-          backendModel: config.backendModel,
-          preferences: sessionRequest.preferences,
+      case "openai-live": {
+        const provider = providerFor("openai-live");
+        const { sdp, preferences } = sessionRequest;
+        return () => createOpenAILiveSession(provider.apiKey, sdp, {
+          model: provider.model,
+          maxOutputTokens: provider.maxOutputTokens,
+          backendModel: provider.backendModel,
+          preferences,
         }, dependencies.fetcher);
+      }
+      case "gemini-live": {
+        const provider = providerFor("gemini-live");
+        const { preferences } = sessionRequest;
+        return () => createGeminiLiveGrant(provider.apiKey, { model: provider.model, preferences }, dependencies.fetcher);
+      }
     }
   };
 
@@ -50,20 +67,20 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
       const open = openLifetimeStreams.get(origin!) ?? 0;
       if (open >= config.lifetimeStreamsPerOrigin) return json({ error: "Origin lifetime stream limit exceeded" }, 429, corsHeaders(origin!));
       openLifetimeStreams.set(origin!, open + 1);
-      return lifetimeStream(request, corsHeaders(origin!), () => releaseLifetimeStream(origin!));
+      return lifetimeStream(request, corsHeaders(origin!), config.providers.map((provider) => provider.protocol), () => releaseLifetimeStream(origin!));
     }
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, { Allow: "GET, POST, OPTIONS" });
     if (!originGuard.allows(origin)) return json({ error: "Origin is not allowed" }, 403, origin ? corsHeaders(origin) : {});
     if (!rateLimiter.take(origin!)) return json({ error: "Session request rate limit exceeded" }, 429, { "Retry-After": retryAfter(config.rateLimitWindowMs), ...corsHeaders(origin!) });
-    let sessionRequest: SessionRequest;
+    let grant: () => Promise<LiveGrant>;
     try {
-      sessionRequest = parseSessionRequest(await requestBody(request));
+      grant = issueGrant(parseSessionRequest(await requestBody(request)));
     } catch {
       return json({ error: "Invalid SDP offer or session preferences" }, 400, corsHeaders(origin!));
     }
     if (!sessionBudget.reserve(origin!)) return json({ error: "Origin session budget exhausted" }, 429, { "Retry-After": retryAfter(config.sessionBudgetWindowMs), ...corsHeaders(origin!) });
     try {
-      return json(await issueGrant(sessionRequest), 201, { "Cache-Control": "no-store", ...corsHeaders(origin!) });
+      return json(await grant(), 201, { "Cache-Control": "no-store", ...corsHeaders(origin!) });
     } catch (error) {
       console.error("Session issuance failed", error instanceof Error ? error.message : String(error));
       return json({ error: "Unable to create a Live session" }, 502, corsHeaders(origin!));
@@ -71,7 +88,7 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
   };
 }
 
-function lifetimeStream(request: Request, cors: Record<string, string>, release: () => void): Response {
+function lifetimeStream(request: Request, cors: Record<string, string>, protocols: ProtocolId[], release: () => void): Response {
   const encoder = new TextEncoder();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let cleaned = false;
@@ -85,7 +102,7 @@ function lifetimeStream(request: Request, cors: Record<string, string>, release:
   };
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode("event: ready\ndata: {}\n\n"));
+      controller.enqueue(encoder.encode(`event: ready\ndata: ${JSON.stringify({ protocols })}\n\n`));
       heartbeat = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(": heartbeat\n\n"));

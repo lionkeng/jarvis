@@ -1,15 +1,23 @@
 import { record } from "./live-events.js";
 import type { RealtimeSessionPreferences } from "./types.js";
 
-export type ProtocolId = "openai-live";
+export type ProtocolId = "openai-live" | "gemini-live";
 export type LivePlan = readonly [ProtocolId, ...ProtocolId[]];
-export interface LiveGrant {
+export interface WebrtcAnswerGrant {
   kind: "webrtc-answer";
   sessionId: string;
   answerSdp: string;
 }
+export interface WebsocketTokenGrant {
+  kind: "websocket-token";
+  endpoint: string;
+  token: string;
+  setup: Record<string, unknown>;
+  expiresAt: number;
+}
+export type LiveGrant = WebrtcAnswerGrant | WebsocketTokenGrant;
 
-const PROTOCOLS: readonly string[] = ["openai-live"];
+const PROTOCOLS: readonly string[] = ["openai-live", "gemini-live"];
 
 export function parsePlan(value: unknown): LivePlan {
   const payload = record(value);
@@ -23,11 +31,21 @@ export function parsePlan(value: unknown): LivePlan {
 
 export function parseGrant(value: unknown): LiveGrant {
   const payload = record(value);
+  if (payload?.kind === "websocket-token") return parseTokenGrant(payload);
   const session = record(payload?.session);
   const transport = record(payload?.transport);
   if (typeof session?.id !== "string" || !session.id.trim() || transport?.type !== "webrtc"
     || typeof transport.sdp !== "string" || !transport.sdp.trim()) throw new Error("Session endpoint returned an invalid Live session");
   return { kind: "webrtc-answer", sessionId: session.id, answerSdp: transport.sdp };
+}
+
+function parseTokenGrant(payload: Record<string, unknown>): WebsocketTokenGrant {
+  const { endpoint, token, expiresAt } = payload;
+  const setup = record(payload.setup);
+  const deadline = typeof expiresAt === "string" || typeof expiresAt === "number" ? new Date(expiresAt).getTime() : Number.NaN;
+  if (typeof endpoint !== "string" || !endpoint.startsWith("wss://") || typeof token !== "string" || !token.trim()
+    || !setup || !Number.isFinite(deadline)) throw new Error("Session endpoint returned an invalid Live session");
+  return { kind: "websocket-token", endpoint, token, setup, expiresAt: deadline };
 }
 
 export interface BrokerLeaseOptions {

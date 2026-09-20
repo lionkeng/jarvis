@@ -1,4 +1,5 @@
 import { BrokerLease, type LiveGrant, type LivePlan, type ProtocolId } from "./broker.js";
+import { GeminiLiveChannel } from "./gemini.js";
 import { OpenAILiveChannel } from "./openai.js";
 import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolResult, RealtimeTransport } from "./types.js";
 
@@ -22,7 +23,10 @@ export interface LiveChannel {
   abort(reason: LiveChannelAbort): void;
 }
 
-const CHANNELS = new Map<ProtocolId, () => LiveChannel>([["openai-live", () => new OpenAILiveChannel()]]);
+const CHANNELS = new Map<ProtocolId, () => LiveChannel>([
+  ["openai-live", () => new OpenAILiveChannel()],
+  ["gemini-live", () => new GeminiLiveChannel()],
+]);
 
 type LivePhase = "starting" | "active" | "closing" | "closed";
 
@@ -217,10 +221,6 @@ export class LiveTransport implements RealtimeTransport {
   }
 
   #emit(event: NormalizedRealtimeEvent): void { for (const listener of this.#listeners) listener(event); }
-}
-
-export class OpenAILiveTransport extends LiveTransport {
-  constructor() { super({ protocol: "openai-live" }); }
 }
 
 export function createLiveTransport(options: { protocol?: ProtocolId } = {}): RealtimeTransport {

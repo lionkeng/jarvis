@@ -3,10 +3,10 @@ import { LiveToolBatches, normalizeOpenAIEvent, record } from "./live-events.js"
 import type { LiveChannel, LiveChannelAbort, LiveChannelHost } from "./live-transport.js";
 import type { RealtimeToolResult } from "./types.js";
 export { normalizeOpenAIEvent } from "./live-events.js";
-export { OpenAILiveTransport } from "./live-transport.js";
 
 export function parseLiveSession(value: unknown): { id: string; sdp: string } {
   const grant = parseGrant(value);
+  if (grant.kind !== "webrtc-answer") throw new Error("Session endpoint returned an invalid Live session");
   return { id: grant.sessionId, sdp: grant.answerSdp };
 }
 
@@ -79,6 +79,7 @@ export class OpenAILiveChannel implements LiveChannel {
     const sdp = peer.localDescription?.sdp;
     if (!sdp) throw new Error("Missing local SDP offer");
     const grant = await host.grant({ sdp });
+    if (grant.kind !== "webrtc-answer") throw new Error("Session endpoint returned an invalid Live session");
     await peer.setRemoteDescription({ type: "answer", sdp: grant.answerSdp });
   }
 

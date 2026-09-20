@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LEGACY_POST_BODY, OPENAI_POST_BODY } from "../../scripts/fixtures/session-wire.js";
+import { GEMINI_POST_BODY, LEGACY_POST_BODY, OPENAI_POST_BODY } from "../../scripts/fixtures/session-wire.js";
 import { parseSessionRequest } from "./session-request.js";
 
 describe("parseSessionRequest", () => {
@@ -21,8 +21,19 @@ describe("parseSessionRequest", () => {
     }
   });
 
+  test("parses the Gemini POST fixture, which carries no offer", () => {
+    expect(parseSessionRequest(GEMINI_POST_BODY)).toEqual({
+      protocol: "gemini-live",
+      preferences: { responseTiming: "natural", speechRate: 1 },
+    });
+  });
+
+  test("ignores an SDP offer on a Gemini request", () => {
+    expect(parseSessionRequest({ ...GEMINI_POST_BODY, sdp: OPENAI_POST_BODY.sdp })).toEqual(parseSessionRequest(GEMINI_POST_BODY));
+  });
+
   test("rejects an unknown protocol", () => {
-    expect(() => parseSessionRequest({ protocol: "gemini-live", sdp: OPENAI_POST_BODY.sdp })).toThrow();
+    expect(() => parseSessionRequest({ protocol: "anthropic-live", sdp: OPENAI_POST_BODY.sdp })).toThrow();
     expect(() => parseSessionRequest({ protocol: 7, sdp: OPENAI_POST_BODY.sdp })).toThrow();
   });
 

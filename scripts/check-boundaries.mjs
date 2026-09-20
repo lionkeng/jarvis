@@ -31,6 +31,9 @@ for (const file of sourceFiles(coreSource)) {
   if (!file.includes("/transport/") && /(?:session\.(?:input_transcript|output_transcript|close|started|usage|delegation)|input_audio_buffer\.|response\.(?:event|output_item|item|completed|failed|incomplete|cancelled|audio|output_audio|audio_transcript|output_audio_transcript|text|output_text|function_call_arguments|create\b)|conversation\.item\.(?:input_audio_transcription|create)|function_call_output)/.test(text)) {
     fail(file, "raw OpenAI event names belong only in transport/");
   }
+  if (!file.includes("/transport/") && /\b(?:BidiGenerateContent|realtimeInput|serverContent|setupComplete|modelTurn|inlineData|turnComplete|generationComplete|inputTranscription|outputTranscription|toolCallCancellation|functionCalls|functionResponses|toolResponse|sessionResumption|sessionResumptionUpdate|goAway|activityStart|activityEnd|audioStreamEnd)\b/.test(text)) {
+    fail(file, "raw Gemini Live event names belong only in transport/");
+  }
 }
 
 for (const packageSource of [join(root, "packages/react/src"), join(root, "packages/wc/src"), join(root, "apps/demo/src")]) {
