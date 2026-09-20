@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceViz } from "../voice-viz.js";
 import { createIdleFeatures } from "../audio/idle-features.js";
 import type { VoiceFeatureSource } from "../audio/types.js";
+import type { AgentState } from "../state/types.js";
 import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "../transport/types.js";
 
 class FakeTransport implements RealtimeTransport {
@@ -59,20 +60,48 @@ function stubLiveWire(ready: string) {
   return { steps, fetcher, track };
 }
 
+/** Agent playback whose analyser byte data follows a caller-controlled amplitude. */
+function stubAgentAudio() {
+  let amplitude = 0;
+  const analyser = {
+    fftSize: 2048,
+    smoothingTimeConstant: 0,
+    frequencyBinCount: 1024,
+    connect() {}, disconnect() {},
+    getByteTimeDomainData(target: Uint8Array) { target.fill(128 + amplitude); },
+    // Bins 4 to 153 carry the 85 Hz - 3.6 kHz voice band at 48 kHz over 1024 bins.
+    getByteFrequencyData(target: Uint8Array) { target.fill(0); target.fill(amplitude ? 200 : 0, 4, 154); },
+  };
+  vi.stubGlobal("AudioContext", class {
+    state = "running";
+    sampleRate = 48_000;
+    destination = {};
+    createAnalyser() { return analyser; }
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    async resume() {}
+    async close() {}
+  });
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockReturnValue(undefined);
+  return { speak() { amplitude = 64; }, cut() { amplitude = 0; } };
+}
+
 describe("VoiceViz integration", () => {
   let observerStarts = 0;
   let observerStops = 0;
+  let frame: FrameRequestCallback | undefined;
 
   beforeEach(() => {
     observerStarts = 0;
     observerStops = 0;
+    frame = undefined;
     vi.stubGlobal("ResizeObserver", class {
       observe() { observerStarts += 1; }
       disconnect() { observerStops += 1; }
       unobserve() {}
     });
     let nextFrame = 1;
-    vi.stubGlobal("requestAnimationFrame", vi.fn(() => nextFrame++));
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { frame = callback; return nextFrame++; }));
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
@@ -207,17 +236,7 @@ describe("VoiceViz integration", () => {
   });
 
   it("completes the last Live caption row when a continuous session disconnects", async () => {
-    vi.stubGlobal("AudioContext", class {
-      state = "running";
-      sampleRate = 48_000;
-      destination = {};
-      createAnalyser() { return { fftSize: 2048, smoothingTimeConstant: 0, frequencyBinCount: 1024, connect() {}, disconnect() {} }; }
-      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
-      async resume() {}
-      async close() {}
-    });
-    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
-    vi.spyOn(HTMLMediaElement.prototype, "pause").mockReturnValue(undefined);
+    stubAgentAudio();
     const transport = new FakeTransport();
     const viz = new VoiceViz({ transport, reducedMotion: true });
     viz.mount(document.createElement("div"));
@@ -228,6 +247,35 @@ describe("VoiceViz integration", () => {
     transport.emit({ type: "disconnected" });
 
     expect(viz.transcript.getSnapshot().messages.map(({ text, status }) => [text, status])).toEqual([["Hello", "complete"]]);
+    viz.unmount();
+  });
+
+  it("holds the interrupted state while the cut-off agent audio decays out of the analyser", async () => {
+    const agentAudio = stubAgentAudio();
+    const transport = new FakeTransport();
+    const viz = new VoiceViz({ transport, presets: [], reducedMotion: true });
+    viz.mount(document.createElement("div"));
+    await viz.connect("/session");
+    transport.emit({ type: "agent-track", stream: {} as MediaStream, track: { kind: "audio" } as MediaStreamTrack, continuous: true });
+
+    let now = 0;
+    const step = (): AgentState => { now += 16; frame!(now); return viz.state; };
+
+    agentAudio.speak();
+    const spoken = new Set<AgentState>();
+    for (let index = 0; index < 4; index += 1) spoken.add(step());
+    expect([...spoken]).toEqual(["speaking"]);
+
+    transport.emit({ type: "user-speech-started" });
+    expect(viz.state).toBe("interrupted");
+
+    agentAudio.cut();
+    const decaying = new Set<AgentState>();
+    for (let index = 0; index < 60; index += 1) decaying.add(step());
+    expect([...decaying]).toEqual(["interrupted"]);
+
+    agentAudio.speak();
+    expect(step()).toBe("speaking");
     viz.unmount();
   });
 
