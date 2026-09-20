@@ -123,7 +123,6 @@ export class VoiceDemoTransport implements RealtimeTransport {
   #timers = new Set<number>();
   #connected = false;
   #run = 0;
-  #seq = 0;
   #pendingCallId: string | undefined;
   readonly #toolResults: RealtimeToolResult[] = [];
 
@@ -178,8 +177,7 @@ export class VoiceDemoTransport implements RealtimeTransport {
         this.#later(80, () => this.#stream(script.agent));
         return;
       }
-      this.#seq += 1;
-      const callId = `call_${script.id}_${this.#seq}`;
+      const callId = `call_${script.id}_${crypto.randomUUID()}`;
       this.#pendingCallId = callId;
       this.#emit({
         type: "tool-call",
