@@ -34,11 +34,11 @@ OR, to run both demo and the server,
 pnpm dev:all
 ```
 
-Open `http://localhost:5180/`. Select **OpenAI** or **Gemini**, and connect the primary host to `http://localhost:3010/session`. Vite fails if port 5180 is already taken so the page origin stays on the allowlist.
+`http://localhost:5180/` is the voice-first demo, described below. The visualization lab is at `http://localhost:5180/jarvis-ui`. In the lab, select **OpenAI** or **Gemini**, and connect the primary host to `http://localhost:3010/session`. Vite fails if port 5180 is already taken so the page origin stays on the allowlist.
 
 ## Voice-first demo
 
-Open `/voice.html#/dashboard`. The demo offers three sources: **Simulation**, **OpenAI**, and **Gemini**. Simulation needs no credentials. Both live sources use the same Bun session endpoint as the visualization lab.
+Open `http://localhost:5180/`. The demo offers three sources: **Simulation**, **OpenAI**, and **Gemini**. Simulation needs no credentials. Both live sources use the same Bun session endpoint as the visualization lab.
 
 Spoken UI requests become one `perform_ui_actions` call. `VoiceViz` emits a `toolcall` event. A demo-only XState actor validates the call, runs a registered capability, and returns one result through `submitToolResult`. Ordinary questions stay in conversation and do not change the page.
 

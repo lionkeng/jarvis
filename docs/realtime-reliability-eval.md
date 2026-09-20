@@ -7,7 +7,7 @@ The scoring rules and corpus live in `thoughts/shared/plans/2026-08-20-realtime-
 ## Start a Live session
 
 1. Set `OPENAI_API_KEY` in `server/.env` and start the BFF. Defaults are `OPENAI_LIVE_MODEL=gpt-live-1` and `OPENAI_LIVE_BACKEND_MODEL=gpt-5.6-luna`.
-2. Open `http://localhost:5180/voice.html`, select **OpenAI**, and connect.
+2. Open `http://localhost:5180/`, select **OpenAI**, and connect.
 3. Confirm startup waits for `session.started`. Speak and verify both audible playback and UI action results.
 4. End the conversation and confirm `session.closed` supplies final cumulative voice seconds. A dropped connection or timeout leaves final usage unconfirmed.
 
@@ -18,7 +18,7 @@ Check overlapping speech without cancelling backend actions, late caption fragme
 ## Start a Gemini session
 
 1. Set `GEMINI_API_KEY` in `server/.env` and start the BFF. `GEMINI_LIVE_MODEL` is optional and defaults to `gemini-3.8-live`. The other accepted value is `gemini-3.8-live-extended-thinking`.
-2. Open `http://localhost:5180/voice.html`, select **Gemini**, and connect.
+2. Open `http://localhost:5180/`, select **Gemini**, and connect.
 3. Speak and verify both audible playback and UI action results.
 4. End the conversation. The browser closes the WebSocket without waiting for a provider message.
 
@@ -65,4 +65,4 @@ Assign exactly one primary stage.
 
 ## Simulator results
 
-The simulated scripts on `voice.html` in simulation mode exercise the interaction actor and ordered executor. Mark those rows as simulation. Do not count them toward the 19 of 20 live routing gate.
+The simulated scripts on the voice-first demo in simulation mode exercise the interaction actor and ordered executor. Mark those rows as simulation. Do not count them toward the 19 of 20 live routing gate.
