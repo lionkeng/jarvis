@@ -18,6 +18,10 @@ const geminiPost = (body: unknown = GEMINI_POST_BODY) => new Request("http://loc
 });
 const lifetimeRequest = (init: RequestInit = {}) => new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" }, ...init });
 const answer = { session: { id: "live_test" }, transport: { type: "webrtc", sdp: "v=0" } };
+// Every spelling here parses to the origin https://voice.example.
+const originSpellings = ["HTTPS://voice.example", "https://VOICE.example", "https://voice.example:443", "https://voice.example/x", "https://user@voice.example"];
+const postFrom = (origin: string) => new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: origin } });
+const streamFrom = (origin: string) => new Request("http://localhost/session", { method: "GET", headers: { Origin: origin } });
 const fetcher = async () => Response.json(answer);
 
 describe("session route", () => {
@@ -308,6 +312,98 @@ describe("session route", () => {
     const limited = await route(request("203.0.113.45"));
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("60");
+  });
+
+  test("charges every spelling of one origin against a single rate window", async () => {
+    const route = createSessionRoute({ config, fetcher });
+    expect((await route(postFrom("https://voice.example"))).status).toBe(201);
+    for (const spelling of originSpellings) {
+      const limited = await route(postFrom(spelling));
+      expect(limited.status).toBe(429);
+      expect(limited.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      expect(await limited.json()).toEqual({ error: "Session request rate limit exceeded" });
+    }
+  });
+
+  test("spends the rate window when the first request uses a variant spelling", async () => {
+    for (const spelling of originSpellings) {
+      const route = createSessionRoute({ config, fetcher });
+      const issued = await route(postFrom(spelling));
+      expect(issued.status).toBe(201);
+      expect(issued.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      expect((await route(postFrom("https://voice.example"))).status).toBe(429);
+    }
+  });
+
+  test("charges every spelling of one origin against a single session budget", async () => {
+    const route = createSessionRoute({ config: { ...config, rateLimitRequests: 10, sessionBudgetRequests: 1 }, fetcher });
+    expect((await route(postFrom("https://voice.example"))).status).toBe(201);
+    for (const spelling of originSpellings) {
+      const exhausted = await route(postFrom(spelling));
+      expect(exhausted.status).toBe(429);
+      expect(exhausted.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      expect(await exhausted.json()).toEqual({ error: "Origin session budget exhausted" });
+    }
+  });
+
+  test("counts every spelling of one origin against a single lifetime-stream cap", async () => {
+    const route = createSessionRoute({ config: { ...config, lifetimeStreamsPerOrigin: 2 }, fetcher });
+    const [firstSpelling, ...otherSpellings] = originSpellings;
+    const canonical = await route(streamFrom("https://voice.example"));
+    const variant = await route(streamFrom(firstSpelling!));
+    expect(canonical.status).toBe(200);
+    expect(variant.status).toBe(200);
+    expect(variant.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+    for (const spelling of otherSpellings) {
+      const limited = await route(streamFrom(spelling));
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({ error: "Origin lifetime stream limit exceeded" });
+    }
+    await variant.body!.cancel();
+    const reopened = await route(streamFrom(otherSpellings[0]!));
+    expect(reopened.status).toBe(200);
+    expect((await route(streamFrom("https://voice.example"))).status).toBe(429);
+    await canonical.body!.cancel();
+    await reopened.body!.cancel();
+  });
+
+  test("keeps separate counters for distinct allowed origins", async () => {
+    const route = createSessionRoute({ config: { ...config, allowedOrigins: ["https://voice.example", "https://other.example"] }, fetcher });
+    expect((await route(postFrom("https://voice.example"))).status).toBe(201);
+    expect((await route(postFrom("https://other.example"))).status).toBe(201);
+    expect((await route(postFrom("https://other.example:443"))).status).toBe(429);
+  });
+
+  test("charges all loopback origins against one shared set of counters", async () => {
+    const loopbackOrigins = ["http://127.0.0.1:4321", "http://[::1]:5180", "https://localhost:9", "http://LOCALHOST:5180"];
+    const loopbackConfig = { ...config, allowedOrigins: ["https://voice.example", "http://localhost:5180"], lifetimeStreamsPerOrigin: 1 };
+
+    const rateLimited = createSessionRoute({ config: loopbackConfig, fetcher });
+    expect((await rateLimited(postFrom("http://localhost:5180"))).status).toBe(201);
+    for (const origin of loopbackOrigins) {
+      const limited = await rateLimited(postFrom(origin));
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({ error: "Session request rate limit exceeded" });
+    }
+    const viaOtherHost = await rateLimited(postFrom("http://127.0.0.1:4321"));
+    expect(viaOtherHost.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:4321");
+    expect((await rateLimited(postFrom("https://voice.example"))).status).toBe(201);
+
+    const budgeted = createSessionRoute({ config: { ...loopbackConfig, rateLimitRequests: 10, sessionBudgetRequests: 1 }, fetcher });
+    expect((await budgeted(postFrom("http://localhost:5180"))).status).toBe(201);
+    for (const origin of loopbackOrigins) {
+      const exhausted = await budgeted(postFrom(origin));
+      expect(exhausted.status).toBe(429);
+      expect(await exhausted.json()).toEqual({ error: "Origin session budget exhausted" });
+    }
+
+    const stream = await rateLimited(streamFrom("http://localhost:5180"));
+    expect(stream.status).toBe(200);
+    for (const origin of loopbackOrigins) expect((await rateLimited(streamFrom(origin))).status).toBe(429);
+    const remoteStream = await rateLimited(streamFrom("https://voice.example"));
+    expect(remoteStream.status).toBe(200);
+    await stream.body!.cancel();
+    await remoteStream.body!.cancel();
   });
 
   test("rejects malformed methods", async () => {

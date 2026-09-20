@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useActorRef, useSelector } from "@xstate/react";
-import { VoiceViz, type RealtimeToolResult, type ResponseTiming, type TranscriptStore } from "@jarvis-viz/core";
+import { createLiveTransport, VoiceViz, type LiveProtocolId, type RealtimeToolResult, type RealtimeTransport, type ResponseTiming, type TranscriptStore, type VoiceFeatureSource } from "@jarvis-viz/core";
 import { TranscriptView } from "@jarvis-viz/react";
 import { UiCapabilityRegistry } from "./capability-registry.js";
 import { createHashRouter } from "./hash-router.js";
@@ -11,12 +11,24 @@ import { VOICE_DEMO_SCRIPTS, VoiceDemoTransport } from "./voice-demo-transport.j
 import { DemoVoiceFeatureSource } from "../demo-transport.js";
 
 type ConnectionPhase = "disconnected" | "connecting" | "connected" | "closing";
+type SourceMode = "simulation" | LiveProtocolId;
 const RESPONSE_TIMINGS: ReadonlyArray<{ value: ResponseTiming; label: string }> = [
   { value: "fast", label: "Fast" },
   { value: "natural", label: "Natural" },
   { value: "patient", label: "Patient" },
 ];
+const LIVE_SOURCES: ReadonlyArray<{ mode: LiveProtocolId; label: string }> = [
+  { mode: "openai-live", label: "OpenAI" },
+  { mode: "gemini-live", label: "Gemini" },
+];
 const ROUTES = ["dashboard", "library", "article", "settings"] as const;
+
+function createSource(mode: SourceMode): { transport: RealtimeTransport; featureSource?: VoiceFeatureSource; demo?: VoiceDemoTransport } {
+  if (mode !== "simulation") return { transport: createLiveTransport({ protocol: mode }) };
+  const featureSource = new DemoVoiceFeatureSource();
+  const demo = new VoiceDemoTransport(featureSource);
+  return { transport: demo, featureSource, demo };
+}
 
 export function VoiceApp() {
   const registry = useRef(new UiCapabilityRegistry()).current;
@@ -41,7 +53,7 @@ export function VoiceApp() {
     queueFull: snapshot.context.queue.length >= INTERACTION_QUEUE_LIMIT,
   }));
 
-  const [mode, setMode] = useState<"simulation" | "live">("simulation");
+  const [mode, setMode] = useState<SourceMode>("simulation");
   const [endpoint, setEndpoint] = useState("http://localhost:3010/session");
   const [responseTiming, setResponseTiming] = useState<ResponseTiming>("natural");
   const [speechRate, setSpeechRate] = useState(1);
@@ -73,11 +85,11 @@ export function VoiceApp() {
     const host = mountRef.current;
     if (!host) return;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const signal = mode === "simulation" ? new DemoVoiceFeatureSource() : undefined;
-    const transport = signal ? new VoiceDemoTransport(signal) : undefined;
-    demoTransportRef.current = transport;
+    const source = createSource(mode);
+    demoTransportRef.current = source.demo;
     const viz = new VoiceViz({
-      ...(transport && signal ? { transport, featureSource: signal } : {}),
+      transport: source.transport,
+      ...(source.featureSource ? { featureSource: source.featureSource } : {}),
       presets: ["ring", "hud"],
       reducedMotion,
     });
@@ -108,7 +120,7 @@ export function VoiceApp() {
     });
     const unsubBackendFailed = viz.on("backendfailed", ({ status }) => { setStatus(`Backend response ${status}`); });
     const unsubProviderError = viz.on("providererror", ({ message }) => { setStatus(message); });
-    if (transport) void viz.connect("demo");
+    if (source.demo) void viz.connect("demo");
     return () => {
       unsubTool();
       unsubState();
@@ -123,11 +135,11 @@ export function VoiceApp() {
     };
   }, [actor, mode]);
 
-  const selectMode = (nextMode: "simulation" | "live") => {
+  const selectMode = (nextMode: SourceMode) => {
     if (nextMode === mode || activity.voiceBusy) return;
     connectionAttempt.current += 1;
     setConnectionPhase("disconnected");
-    setStatus(nextMode === "live" ? "Ready" : "idle");
+    setStatus(nextMode === "simulation" ? "idle" : "Ready");
     setMode(nextMode);
   };
 
@@ -182,7 +194,9 @@ export function VoiceApp() {
 
       <div className="toolbar" role="group" aria-label="Source">
         <button type="button" className={mode === "simulation" ? "active" : ""} disabled={activity.voiceBusy} onClick={() => selectMode("simulation")}>Simulation</button>
-        <button type="button" className={mode === "live" ? "active" : ""} disabled={activity.voiceBusy} onClick={() => selectMode("live")}>OpenAI live</button>
+        {LIVE_SOURCES.map((source) => (
+          <button key={source.mode} type="button" className={mode === source.mode ? "active" : ""} disabled={activity.voiceBusy} onClick={() => selectMode(source.mode)}>{source.label}</button>
+        ))}
         <span>{status}</span>
       </div>
 

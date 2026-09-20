@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { themes, VoiceViz, type PanelPlacement, type PresetName, type ResponseTiming, type TextMotion, type ThemeName, type TranscriptMessage, type TranscriptStore } from "@jarvis-viz/core";
+import { createLiveTransport, themes, VoiceViz, type LiveProtocolId, type PanelPlacement, type PresetName, type RealtimeTransport, type ResponseTiming, type TextMotion, type ThemeName, type TranscriptMessage, type TranscriptStore, type VoiceFeatureSource } from "@jarvis-viz/core";
 import { TranscriptView } from "@jarvis-viz/react";
 import { DemoTransport, DemoVoiceFeatureSource } from "./demo-transport.js";
 
@@ -9,7 +9,18 @@ const RESPONSE_TIMINGS: ReadonlyArray<{ value: ResponseTiming; label: string; de
   { value: "natural", label: "Natural", detail: "Prompt for a natural conversational pace." },
   { value: "patient", label: "Patient", detail: "Prompt to leave more time for the user to finish." },
 ];
+const LIVE_SOURCES: ReadonlyArray<{ mode: LiveProtocolId; label: string }> = [
+  { mode: "openai-live", label: "OpenAI" },
+  { mode: "gemini-live", label: "Gemini" },
+];
 type ConnectionPhase = "disconnected" | "connecting" | "connected" | "closing";
+type SourceMode = "simulation" | LiveProtocolId;
+
+function createSource(mode: SourceMode): { transport: RealtimeTransport; featureSource?: VoiceFeatureSource } {
+  if (mode !== "simulation") return { transport: createLiveTransport({ protocol: mode }) };
+  const featureSource = new DemoVoiceFeatureSource();
+  return { transport: new DemoTransport(featureSource), featureSource };
+}
 
 interface StageProps {
   label: string;
@@ -31,7 +42,7 @@ export function App() {
   const hosts = useRef<Array<HTMLDivElement | null>>([]);
   const instances = useRef<VoiceViz[]>([]);
   const connectionAttempt = useRef(0);
-  const [mode, setMode] = useState<"simulation" | "live">("simulation");
+  const [mode, setMode] = useState<SourceMode>("simulation");
   const [theme, setTheme] = useState<ThemeName>("cyan");
   const [textMotion, setTextMotion] = useState<TextMotion>("flow");
   const [placement, setPlacement] = useState<PanelPlacement>("auto");
@@ -50,11 +61,10 @@ export function App() {
     const unsubscribes: Array<() => void> = [];
     const active = hosts.current.flatMap((host, index) => {
       if (!host) return [];
-      const useLiveTransport = mode === "live" && index === 1;
-      const signal = useLiveTransport ? undefined : new DemoVoiceFeatureSource();
-      const transport = signal ? { transport: new DemoTransport(signal), featureSource: signal } : {};
+      const source = createSource(index === 1 ? mode : "simulation");
       const viz = new VoiceViz({
-        ...transport,
+        transport: source.transport,
+        ...(source.featureSource ? { featureSource: source.featureSource } : {}),
         presets,
         theme: { ...themes[theme], textMotion },
         panelPlacement: placement,
@@ -79,7 +89,7 @@ export function App() {
         setMessages(viz.transcript.getSnapshot().messages);
         unsubscribes.push(viz.transcript.subscribe((snapshot) => setMessages(snapshot.messages)));
       }
-      if (!useLiveTransport) void viz.connect("demo");
+      if (source.featureSource) void viz.connect("demo");
       return [viz];
     });
     instances.current = active;
@@ -95,11 +105,11 @@ export function App() {
   useEffect(() => { for (const instance of instances.current) instance.setPresets(presets); }, [presets]);
 
   const togglePreset = (preset: PresetName) => setPresets((current) => current.includes(preset) ? current.filter((value) => value !== preset) : [...current, preset]);
-  const selectMode = (nextMode: "simulation" | "live") => {
+  const selectMode = (nextMode: SourceMode) => {
     if (nextMode === mode) return;
     connectionAttempt.current += 1;
     setConnectionPhase("disconnected");
-    setStatus(nextMode === "live" ? "Ready" : "idle");
+    setStatus(nextMode === "simulation" ? "idle" : "Ready");
     setMode(nextMode);
   };
   const toggleLiveConnection = async () => {
@@ -140,7 +150,9 @@ export function App() {
           <span className="control-label">Source</span>
           <div className="segmented">
             <button className={mode === "simulation" ? "active" : ""} onClick={() => selectMode("simulation")}>Simulation</button>
-            <button className={mode === "live" ? "active" : ""} onClick={() => selectMode("live")}>OpenAI live</button>
+            {LIVE_SOURCES.map((source) => (
+              <button key={source.mode} className={mode === source.mode ? "active" : ""} onClick={() => selectMode(source.mode)}>{source.label}</button>
+            ))}
           </div>
         </div>
         <label className="control-group"><span className="control-label">Theme</span><select value={theme} onChange={(event) => setTheme(event.currentTarget.value as ThemeName)}><option value="cyan">Cyan</option><option value="amber">Amber</option><option value="rose">Rose</option><option value="spectrum">Spectrum</option><option value="coast">Coast</option><option value="ultraviolet">Ultraviolet</option><option value="magenta">Magenta</option></select></label>
@@ -149,7 +161,7 @@ export function App() {
         <div className="control-group preset-control"><span className="control-label">Layers</span><div className="checks">{PRESETS.map((preset) => <label key={preset}><input type="checkbox" checked={presets.includes(preset)} onChange={() => togglePreset(preset)} />{preset}</label>)}</div></div>
       </section>
 
-      {mode === "live" ? (
+      {mode === "simulation" ? null : (
         <section className="live-connect" aria-labelledby="live-connect-title">
           <header className="live-connect-header">
             <h2 id="live-connect-title">Live voice pacing</h2>
@@ -160,7 +172,7 @@ export function App() {
             <label className="session-field endpoint-field">
               <span className="field-title">Bun session endpoint</span>
               <input value={endpoint} disabled={settingsLocked} onChange={(event) => setEndpoint(event.currentTarget.value)} />
-              <span className="field-help">GPT Live-1 session</span>
+              <span className="field-help">Live session broker</span>
             </label>
 
             <fieldset className="session-field timing-field" disabled={settingsLocked}>
@@ -216,7 +228,7 @@ export function App() {
             </button>
           </footer>
         </section>
-      ) : null}
+      )}
 
       <div className="status-line"><span>Primary state</span><strong>{status}</strong></div>
 

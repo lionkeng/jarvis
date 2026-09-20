@@ -23,10 +23,10 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
   const sessionBudget = dependencies.sessionBudget ?? new SessionBudget(config.sessionBudgetRequests, config.sessionBudgetWindowMs);
   const openLifetimeStreams = new Map<string, number>();
 
-  const releaseLifetimeStream = (origin: string) => {
-    const open = openLifetimeStreams.get(origin) ?? 0;
-    if (open <= 1) openLifetimeStreams.delete(origin);
-    else openLifetimeStreams.set(origin, open - 1);
+  const releaseLifetimeStream = (bucket: string) => {
+    const open = openLifetimeStreams.get(bucket) ?? 0;
+    if (open <= 1) openLifetimeStreams.delete(bucket);
+    else openLifetimeStreams.set(bucket, open - 1);
   };
 
   const providerFor = <P extends ProtocolId>(protocol: P): Extract<LiveProviderConfig, { protocol: P }> => {
@@ -56,34 +56,36 @@ export function createSessionRoute(dependencies: SessionRouteDependencies) {
   };
 
   return async function sessionRoute(request: Request): Promise<Response> {
-    if (request.method === "OPTIONS") {
-      const origin = request.headers.get("Origin");
-      if (!origin) return json({ error: "Origin is not allowed" }, 403);
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
-    }
     const origin = request.headers.get("Origin");
+    const admitted = originGuard.admit(origin);
+    if (request.method === "OPTIONS") {
+      if (!origin) return json({ error: "Origin is not allowed" }, 403);
+      return new Response(null, { status: 204, headers: corsHeaders(admitted?.origin ?? origin) });
+    }
     if (request.method === "GET") {
-      if (!originGuard.allows(origin)) return json({ error: "Origin is not allowed" }, 403);
-      const open = openLifetimeStreams.get(origin!) ?? 0;
-      if (open >= config.lifetimeStreamsPerOrigin) return json({ error: "Origin lifetime stream limit exceeded" }, 429, corsHeaders(origin!));
-      openLifetimeStreams.set(origin!, open + 1);
-      return lifetimeStream(request, corsHeaders(origin!), config.providers.map((provider) => provider.protocol), () => releaseLifetimeStream(origin!));
+      if (!admitted) return json({ error: "Origin is not allowed" }, 403);
+      const cors = corsHeaders(admitted.origin);
+      const open = openLifetimeStreams.get(admitted.bucket) ?? 0;
+      if (open >= config.lifetimeStreamsPerOrigin) return json({ error: "Origin lifetime stream limit exceeded" }, 429, cors);
+      openLifetimeStreams.set(admitted.bucket, open + 1);
+      return lifetimeStream(request, cors, config.providers.map((provider) => provider.protocol), () => releaseLifetimeStream(admitted.bucket));
     }
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, { Allow: "GET, POST, OPTIONS" });
-    if (!originGuard.allows(origin)) return json({ error: "Origin is not allowed" }, 403, origin ? corsHeaders(origin) : {});
-    if (!rateLimiter.take(origin!)) return json({ error: "Session request rate limit exceeded" }, 429, { "Retry-After": retryAfter(config.rateLimitWindowMs), ...corsHeaders(origin!) });
+    if (!admitted) return json({ error: "Origin is not allowed" }, 403, origin ? corsHeaders(origin) : {});
+    const cors = corsHeaders(admitted.origin);
+    if (!rateLimiter.take(admitted.bucket)) return json({ error: "Session request rate limit exceeded" }, 429, { "Retry-After": retryAfter(config.rateLimitWindowMs), ...cors });
     let grant: () => Promise<LiveGrant>;
     try {
       grant = issueGrant(parseSessionRequest(await requestBody(request)));
     } catch {
-      return json({ error: "Invalid SDP offer or session preferences" }, 400, corsHeaders(origin!));
+      return json({ error: "Invalid SDP offer or session preferences" }, 400, cors);
     }
-    if (!sessionBudget.reserve(origin!)) return json({ error: "Origin session budget exhausted" }, 429, { "Retry-After": retryAfter(config.sessionBudgetWindowMs), ...corsHeaders(origin!) });
+    if (!sessionBudget.reserve(admitted.bucket)) return json({ error: "Origin session budget exhausted" }, 429, { "Retry-After": retryAfter(config.sessionBudgetWindowMs), ...cors });
     try {
-      return json(await grant(), 201, { "Cache-Control": "no-store", ...corsHeaders(origin!) });
+      return json(await grant(), 201, { "Cache-Control": "no-store", ...cors });
     } catch (error) {
       console.error("Session issuance failed", error instanceof Error ? error.message : String(error));
-      return json({ error: "Unable to create a Live session" }, 502, corsHeaders(origin!));
+      return json({ error: "Unable to create a Live session" }, 502, cors);
     }
   };
 }

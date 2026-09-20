@@ -31,6 +31,39 @@ function stubBrowser(): void {
   };
 }
 
+function stubGeminiAudio(getUserMedia: () => Promise<unknown> = async () => ({ getTracks: () => [{ stop() {} }] })): void {
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("WebSocket", class { binaryType = ""; readyState = 0; send() {} close() {} addEventListener() {} });
+  vi.stubGlobal("AudioWorkletNode", class { readonly port = { onmessage: null }; connect() {} disconnect() {} });
+  vi.stubGlobal("AudioContext", class {
+    readonly sampleRate: number;
+    state = "running";
+    readonly destination = {};
+    readonly audioWorklet = { addModule: async () => undefined };
+    constructor(options: { sampleRate?: number } = {}) { this.sampleRate = options.sampleRate ?? 48_000; }
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createMediaStreamDestination() { return { stream: { getAudioTracks: () => [{ stop() {} }] }, connect() {}, disconnect() {} }; }
+    async resume() {}
+    async close() { this.state = "closed"; }
+  });
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = () => "blob:jarvis-pcm";
+    static revokeObjectURL = () => {};
+  });
+}
+
+function geminiGrantFetch() {
+  return vi.fn(async (_input: string | URL | Request, init?: RequestInit) => init?.method === "POST"
+    ? Response.json({
+      kind: "websocket-token",
+      endpoint: "wss://live.example/ws",
+      token: "ephemeral_1",
+      setup: { setup: { model: "models/gemini-3.8-live" } },
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    })
+    : lifetimeResponse(init?.signal).response);
+}
+
 async function settle(): Promise<void> {
   for (let index = 0; index < 24; index += 1) {
     await act(async () => {
@@ -45,7 +78,7 @@ function lifetimeResponse(signal: AbortSignal | null | undefined) {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const heartbeat = () => controller.enqueue(new TextEncoder().encode("data: alive\n\n"));
-      controller.enqueue(new TextEncoder().encode("event: ready\ndata: {}\n\n"));
+      controller.enqueue(new TextEncoder().encode(`event: ready\ndata: {"protocols":["openai-live","gemini-live"]}\n\n`));
       timer = setInterval(heartbeat, 5_000);
       finish = () => {
         clearInterval(timer);
@@ -62,6 +95,12 @@ function lifetimeResponse(signal: AbortSignal | null | undefined) {
   return { response: new Response(body, { headers: { "Content-Type": "text/event-stream" } }), finish: () => finish() };
 }
 
+function postedBody(call: readonly unknown[] | undefined): Record<string, unknown> {
+  const body = (call?.[1] as RequestInit | undefined)?.body;
+  if (typeof body !== "string") throw new Error("missing session POST body");
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 function namedButton(host: HTMLElement, scope: string, label: string): HTMLButtonElement {
   const button = [...host.querySelectorAll(`${scope} button`)].find((node) => node.textContent === label);
   if (!(button instanceof HTMLButtonElement)) throw new Error(`missing ${scope} button ${label}`);
@@ -74,10 +113,13 @@ function namedLink(host: HTMLElement, label: string): HTMLAnchorElement {
   return link;
 }
 
+const mounted = new Map<ReturnType<typeof createRoot>, HTMLElement>();
+
 async function mountApp(): Promise<{ host: HTMLElement; root: ReturnType<typeof createRoot>; seenStates: Set<string> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
+  mounted.set(root, host);
   const seenStates = new Set<string>();
   const observer = new MutationObserver(() => {
     const state = host.querySelector('[data-testid="activity-state"]')?.textContent;
@@ -90,6 +132,7 @@ async function mountApp(): Promise<{ host: HTMLElement; root: ReturnType<typeof 
 }
 
 async function unmountApp(root: ReturnType<typeof createRoot>, host: HTMLElement): Promise<void> {
+  mounted.delete(root);
   await act(async () => { root.unmount(); });
   host.remove();
 }
@@ -102,8 +145,10 @@ describe("VoiceApp", () => {
     stubBrowser();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const [root, host] of [...mounted]) await unmountApp(root, host);
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     window.location.hash = "";
   });
@@ -121,6 +166,7 @@ describe("VoiceApp", () => {
 
   it("runs a simulated voice navigation and a compound navigate-then-scroll", async () => {
     const { host, root, seenStates } = await mountApp();
+    expect(namedButton(host, ".toolbar", "Simulation").className).toBe("active");
     await act(async () => { namedButton(host, ".scripts", "Open the library").click(); });
     await settle();
     expect(host.querySelector("#library-title")).not.toBeNull();
@@ -194,7 +240,7 @@ describe("VoiceApp", () => {
     });
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
     await settle();
     expect(namedButton(host, ".session", "Connect")).toBeInstanceOf(HTMLButtonElement);
     await act(async () => { namedButton(host, ".session", "Connect").click(); });
@@ -202,7 +248,39 @@ describe("VoiceApp", () => {
     expect(fetchMock).toHaveBeenCalled();
     const sessionCall = fetchMock.mock.calls.find((call) => call[1]?.method === "POST");
     expect(sessionCall?.[0]).toBe("http://localhost:3010/session");
+    expect(postedBody(sessionCall)).toMatchObject({ protocol: "openai-live", sdp: "v=0" });
     expect(host.querySelector(".toolbar span")?.textContent).toMatch(/Session endpoint failed|Origin is not allowed|Failed to fetch|Connecting/);
+    await unmountApp(root, host);
+  });
+
+  it("reports a denied microphone on Gemini and asks for no grant", async () => {
+    const fetchMock = geminiGrantFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    stubGeminiAudio(async () => { throw new Error("Microphone is unavailable"); });
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "Gemini").click(); });
+    await settle();
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    expect(host.querySelector(".toolbar span")?.textContent).toBe("Microphone is unavailable");
+    expect(namedButton(host, ".session", "Connect").disabled).toBe(false);
+    expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toEqual([]);
+    await unmountApp(root, host);
+  });
+
+  it("posts the gemini-live protocol once the microphone is granted", async () => {
+    const fetchMock = geminiGrantFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    stubGeminiAudio();
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "Gemini").click(); });
+    await settle();
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    const sessionCall = fetchMock.mock.calls.find((call) => call[1]?.method === "POST");
+    expect(sessionCall?.[0]).toBe("http://localhost:3010/session");
+    expect(postedBody(sessionCall)).toMatchObject({ protocol: "gemini-live", responseTiming: "natural" });
+    expect(postedBody(sessionCall)).not.toHaveProperty("sdp");
     await unmountApp(root, host);
   });
 
@@ -231,7 +309,7 @@ describe("VoiceApp", () => {
     const stopMicrophone = vi.fn();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: stopMicrophone }] }) } });
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
     await act(async () => { namedButton(host, ".session", "Connect").click(); });
     await settle();
     if (reason === "close timeout") {
@@ -244,6 +322,47 @@ describe("VoiceApp", () => {
     }
     expect(host.querySelector(".toolbar span")?.textContent).toContain("usage is unconfirmed");
     expect(namedButton(host, ".session", "Connect").disabled).toBe(false);
+    await unmountApp(root, host);
+  });
+
+  it("tears down a connected live source when Simulation is picked again", async () => {
+    let deliver: ((event: { data: string }) => void) | undefined;
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => init?.method === "POST"
+      ? Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } })
+      : lifetimeResponse(init?.signal).response);
+    vi.stubGlobal("fetch", fetchMock);
+    const channel = {
+      readyState: "open",
+      send() {}, close() {},
+      addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
+    };
+    vi.stubGlobal("RTCPeerConnection", class {
+      iceGatheringState = "complete";
+      localDescription = { type: "offer", sdp: "v=0" };
+      addEventListener() {} addTrack() {} close() {}
+      createDataChannel() { return channel; }
+      async createOffer() { return this.localDescription; }
+      async setLocalDescription() {}
+      async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
+    });
+    const stopMicrophone = vi.fn();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: stopMicrophone }] }) } });
+    const posts = () => fetchMock.mock.calls.filter((call) => call[1]?.method === "POST").length;
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    expect(namedButton(host, ".session", "Disconnect")).toBeInstanceOf(HTMLButtonElement);
+    const liveCanvas = host.querySelector(".stage canvas");
+    expect(liveCanvas).toBeInstanceOf(HTMLCanvasElement);
+    const posted = posts();
+    await act(async () => { namedButton(host, ".toolbar", "Simulation").click(); });
+    await settle();
+    expect(stopMicrophone).toHaveBeenCalledOnce();
+    expect(document.body.contains(liveCanvas)).toBe(false);
+    expect(host.querySelector(".stage canvas")).not.toBe(liveCanvas);
+    expect(namedButton(host, ".scripts", "Open the library")).toBeInstanceOf(HTMLButtonElement);
+    expect(posts()).toBe(posted);
     await unmountApp(root, host);
   });
 
@@ -268,7 +387,7 @@ describe("VoiceApp", () => {
     });
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".toolbar", "OpenAI live").click(); });
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
     await act(async () => { namedButton(host, ".session", "Connect").click(); });
     await settle();
     const send = (event: unknown) => deliver?.({ data: JSON.stringify(event) });
