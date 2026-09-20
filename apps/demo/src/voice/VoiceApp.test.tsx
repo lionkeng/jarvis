@@ -31,6 +31,39 @@ function stubBrowser(): void {
   };
 }
 
+function stubGeminiAudio(getUserMedia: () => Promise<unknown> = async () => ({ getTracks: () => [{ stop() {} }] })): void {
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("WebSocket", class { binaryType = ""; readyState = 0; send() {} close() {} addEventListener() {} });
+  vi.stubGlobal("AudioWorkletNode", class { readonly port = { onmessage: null }; connect() {} disconnect() {} });
+  vi.stubGlobal("AudioContext", class {
+    readonly sampleRate: number;
+    state = "running";
+    readonly destination = {};
+    readonly audioWorklet = { addModule: async () => undefined };
+    constructor(options: { sampleRate?: number } = {}) { this.sampleRate = options.sampleRate ?? 48_000; }
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createMediaStreamDestination() { return { stream: { getAudioTracks: () => [{ stop() {} }] }, connect() {}, disconnect() {} }; }
+    async resume() {}
+    async close() { this.state = "closed"; }
+  });
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = () => "blob:jarvis-pcm";
+    static revokeObjectURL = () => {};
+  });
+}
+
+function geminiGrantFetch() {
+  return vi.fn(async (_input: string | URL | Request, init?: RequestInit) => init?.method === "POST"
+    ? Response.json({
+      kind: "websocket-token",
+      endpoint: "wss://live.example/ws",
+      token: "ephemeral_1",
+      setup: { setup: { model: "models/gemini-3.8-live" } },
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    })
+    : lifetimeResponse(init?.signal).response);
+}
+
 async function settle(): Promise<void> {
   for (let index = 0; index < 24; index += 1) {
     await act(async () => {
@@ -80,10 +113,13 @@ function namedLink(host: HTMLElement, label: string): HTMLAnchorElement {
   return link;
 }
 
+const mounted = new Map<ReturnType<typeof createRoot>, HTMLElement>();
+
 async function mountApp(): Promise<{ host: HTMLElement; root: ReturnType<typeof createRoot>; seenStates: Set<string> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
+  mounted.set(root, host);
   const seenStates = new Set<string>();
   const observer = new MutationObserver(() => {
     const state = host.querySelector('[data-testid="activity-state"]')?.textContent;
@@ -96,6 +132,7 @@ async function mountApp(): Promise<{ host: HTMLElement; root: ReturnType<typeof 
 }
 
 async function unmountApp(root: ReturnType<typeof createRoot>, host: HTMLElement): Promise<void> {
+  mounted.delete(root);
   await act(async () => { root.unmount(); });
   host.remove();
 }
@@ -108,8 +145,10 @@ describe("VoiceApp", () => {
     stubBrowser();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const [root, host] of [...mounted]) await unmountApp(root, host);
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     window.location.hash = "";
   });
@@ -214,21 +253,25 @@ describe("VoiceApp", () => {
     await unmountApp(root, host);
   });
 
-  it("posts the gemini-live protocol when Gemini is the picked source", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => init?.method === "POST"
-      ? Response.json({
-        kind: "websocket-token",
-        endpoint: "wss://live.example/ws",
-        token: "ephemeral_1",
-        setup: { setup: { model: "models/gemini-3.8-live" } },
-        expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
-      })
-      : lifetimeResponse(init?.signal).response);
+  it("reports a denied microphone on Gemini and asks for no grant", async () => {
+    const fetchMock = geminiGrantFetch();
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("WebSocket", class { close() {} addEventListener() {} });
-    vi.stubGlobal("AudioContext", class { close() {} });
-    vi.stubGlobal("AudioWorkletNode", class {});
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => { throw new Error("Microphone is unavailable"); } } });
+    stubGeminiAudio(async () => { throw new Error("Microphone is unavailable"); });
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".toolbar", "Gemini").click(); });
+    await settle();
+    await act(async () => { namedButton(host, ".session", "Connect").click(); });
+    await settle();
+    expect(host.querySelector(".toolbar span")?.textContent).toBe("Microphone is unavailable");
+    expect(namedButton(host, ".session", "Connect").disabled).toBe(false);
+    expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toEqual([]);
+    await unmountApp(root, host);
+  });
+
+  it("posts the gemini-live protocol once the microphone is granted", async () => {
+    const fetchMock = geminiGrantFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    stubGeminiAudio();
     const { host, root } = await mountApp();
     await act(async () => { namedButton(host, ".toolbar", "Gemini").click(); });
     await settle();
@@ -238,8 +281,6 @@ describe("VoiceApp", () => {
     expect(sessionCall?.[0]).toBe("http://localhost:3010/session");
     expect(postedBody(sessionCall)).toMatchObject({ protocol: "gemini-live", responseTiming: "natural" });
     expect(postedBody(sessionCall)).not.toHaveProperty("sdp");
-    expect(host.querySelector(".toolbar span")?.textContent).toBe("Microphone is unavailable");
-    expect(namedButton(host, ".session", "Connect").disabled).toBe(false);
     await unmountApp(root, host);
   });
 
