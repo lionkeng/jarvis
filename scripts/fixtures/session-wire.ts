@@ -10,7 +10,7 @@ export const READY_PLAN_PAYLOAD = { protocols: ["openai-live", "gemini-live"] } 
 export const GEMINI_POST_BODY = { protocol: "gemini-live", responseTiming: "natural", speechRate: 1 } as const;
 export const GEMINI_GRANT = {
   kind: "websocket-token",
-  endpoint: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+  endpoint: "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained",
   token: "auth_tokens/fixture",
   setup: { setup: { model: "models/gemini-3.8-live" } },
   expiresAt: "2026-09-19T12:30:00.000Z",

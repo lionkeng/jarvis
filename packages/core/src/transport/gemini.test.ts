@@ -320,6 +320,8 @@ describe("Gemini live channel", () => {
     h.socket(0).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
     await tick();
     expect(h.frames(1)[0]).toMatchObject({ setup: { sessionResumption: { handle: "handle_1" } } });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 11_000);
     h.socket(1).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
     await tick();
     expect(h.frames(2)[0]).toMatchObject({ setup: { sessionResumption: { handle: "handle_2" } } });
@@ -351,6 +353,42 @@ describe("Gemini live channel", () => {
     h.socket().deliver(new Blob([frame("blob")]));
     await tick();
     expect(h.events.filter((event) => event.type === "agent-text-delta").map((event) => event.delta)).toEqual(["string", "buffer", "blob"]);
+    await h.transport.disconnect();
+  });
+
+  it("ends the session when an audio part carries unreadable base64", async () => {
+    const h = stubGemini();
+    await h.connect();
+    h.socket().deliver(JSON.stringify(modelTurn("!!not base64!!")));
+    await tick();
+    expect(h.events.filter((event) => event.type === "error")).toHaveLength(1);
+    expect(h.types()).toEqual(["agent-track", "connected", "error", "disconnected"]);
+    expect(h.transport.connected).toBe(false);
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
+  });
+
+  it("ends the session when a frame cannot be read at all", async () => {
+    const h = stubGemini();
+    await h.connect();
+    h.socket().deliver(42);
+    await tick();
+    expect(h.events.filter((event) => event.type === "error")).toHaveLength(1);
+    expect(h.types()).toEqual(["agent-track", "connected", "error", "disconnected"]);
+    expect(h.transport.connected).toBe(false);
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
+  });
+
+  it("ignores an unreadable frame from a socket that is no longer current", async () => {
+    const h = stubGemini();
+    FakeSocket.trailing = [[update("handle_1")]];
+    await h.connect();
+    h.socket(0).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
+    await tick();
+    expect(FakeSocket.all).toHaveLength(2);
+    h.socket(0).deliver(42);
+    await tick();
+    expect(h.types()).not.toContain("error");
+    expect(h.transport.connected).toBe(true);
     await h.transport.disconnect();
   });
 
@@ -386,6 +424,21 @@ describe("Gemini live channel", () => {
     expect(h.types()).toEqual(["agent-track", "connected", "error", "disconnected"]);
     expect(h.transport.connected).toBe(false);
     expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the last resumable handle when a later update is not resumable", async () => {
+    const h = stubGemini();
+    await h.connect();
+    h.socket().deliver(JSON.stringify(update("handle_1")));
+    h.socket().deliver(JSON.stringify({ sessionResumptionUpdate: { resumable: false } }));
+    await tick();
+    h.socket(0).drop(1011, UNAVAILABLE);
+    await tick();
+    expect(h.posts()).toBe(2);
+    expect(FakeSocket.all).toHaveLength(2);
+    expect(h.frames(1)[0]).toMatchObject({ setup: { sessionResumption: { handle: "handle_1" } } });
+    expect(h.types()).not.toContain("error");
+    await h.transport.disconnect();
   });
 
   it("ends with an error when the resumed socket never completes setup", async () => {
@@ -433,6 +486,45 @@ describe("Gemini live channel", () => {
     await tick();
     expect(FakeSocket.all).toHaveLength(2);
     expect(() => h.transport.submitToolResult({ callId: "call_1", output: "{}" })).not.toThrow();
+    expect(h.frames(1)).toHaveLength(1);
+    await h.transport.disconnect();
+  });
+
+  it("still sends a pending tool result on the old socket while the reconnect is in flight", async () => {
+    const h = stubGemini();
+    FakeSocket.trailing = [[update("handle_1")]];
+    await h.connect();
+    h.socket(0).deliver(JSON.stringify({ toolCall: { functionCalls: [{ id: "call_1", name: "perform_ui_actions" }] } }));
+    await tick();
+    let deliver: ((value: Response) => void) | undefined;
+    h.fetcher.mockImplementation(async (_input: unknown, init: RequestInit | undefined) => init?.method === "GET"
+      ? h.lease.response
+      : new Promise<Response>((resolve) => { deliver = resolve; }));
+    h.socket(0).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
+    await tick();
+    expect(deliver).toBeDefined();
+    expect(FakeSocket.all).toHaveLength(1);
+    h.transport.submitToolResult({ callId: "call_1", output: '{"ok":true}' });
+    expect(h.frames(0).at(-1)).toEqual({ toolResponse: { functionResponses: [{ id: "call_1", name: "perform_ui_actions", response: { ok: true } }] } });
+    await h.transport.disconnect();
+  });
+
+  it("drops a call issued during the reconnect once the new socket is adopted", async () => {
+    const h = stubGemini();
+    FakeSocket.trailing = [[update("handle_1")]];
+    await h.connect();
+    let deliver: ((value: Response) => void) | undefined;
+    h.fetcher.mockImplementation(async (_input: unknown, init: RequestInit | undefined) => init?.method === "GET"
+      ? h.lease.response
+      : new Promise<Response>((resolve) => { deliver = resolve; }));
+    h.socket(0).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
+    await tick();
+    h.socket(0).deliver(JSON.stringify({ toolCall: { functionCalls: [{ id: "call_2", name: "perform_ui_actions" }] } }));
+    await tick();
+    deliver!(Response.json(grantFor({ token: SECOND_TOKEN }), { status: 201 }));
+    await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(2));
+    await tick();
+    expect(() => h.transport.submitToolResult({ callId: "call_2", output: "{}" })).not.toThrow();
     expect(h.frames(1)).toHaveLength(1);
     await h.transport.disconnect();
   });
@@ -492,6 +584,24 @@ describe("Gemini live channel", () => {
     expect(h.types()).not.toContain("error");
     expect(h.transport.connected).toBe(true);
     await h.transport.disconnect();
+  });
+
+  it("fails closed when a resumed socket is told to go away right after setup", async () => {
+    const h = stubGemini();
+    FakeSocket.trailing = [[update("handle_1")], [update("handle_2")]];
+    await h.connect();
+    h.socket(0).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
+    await tick();
+    expect(FakeSocket.all).toHaveLength(2);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 1_000);
+    h.socket(1).deliver(JSON.stringify({ goAway: { timeLeft: "10s" } }));
+    await tick();
+    expect(h.posts()).toBe(2);
+    expect(FakeSocket.all).toHaveLength(2);
+    expect(h.types()).toEqual(["agent-track", "connected", "error", "disconnected"]);
+    expect(h.events.find((event) => event.type === "error")?.error.message).toContain("final session usage is unconfirmed");
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
   });
 
   it("fails closed when the reconnect grant is refused", async () => {
@@ -618,10 +728,40 @@ describe("Gemini live channel", () => {
     expect(h.transport.connected).toBe(false);
   });
 
-  it("rejects a grant that is not a websocket token", async () => {
+  it("rejects a grant that is not a websocket token and releases the microphone", async () => {
     const h = stubGemini({ session: { id: "live_x" }, transport: { type: "webrtc", sdp: "v=0\r\n" } });
     await expect(h.connect()).rejects.toThrow("invalid Live session");
     expect(FakeSocket.all).toHaveLength(0);
-    expect(h.getUserMedia).not.toHaveBeenCalled();
+    expect(h.getUserMedia).toHaveBeenCalledOnce();
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
+  });
+
+  it("asks for the microphone before it mints a token", async () => {
+    const h = stubGemini();
+    h.getUserMedia.mockImplementation(() => Promise.reject(new Error("Permission denied")));
+    await expect(h.connect()).rejects.toThrow("Permission denied");
+    expect(h.posts()).toBe(0);
+    expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it("releases the microphone when the grant is refused", async () => {
+    const h = stubGemini();
+    h.fetcher.mockImplementation(async (_input: unknown, init: RequestInit | undefined) => init?.method === "GET" ? h.lease.response : new Response(null, { status: 429 }));
+    await expect(h.connect()).rejects.toThrow("429");
+    expect(h.getUserMedia).toHaveBeenCalledOnce();
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
+    expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it("keeps the token out of the error when the socket cannot be constructed", async () => {
+    const h = stubGemini();
+    vi.stubGlobal("WebSocket", class {
+      constructor(url: string) { throw new Error(`Failed to construct 'WebSocket': ${url}`); }
+    });
+    const failure = await h.connect().then(() => undefined, (error: Error) => error);
+    expect(failure?.message).not.toContain("auth_tokens");
+    expect(failure?.message).not.toContain("access_token");
+    expect(h.events.find((event) => event.type === "error")?.error.message).toBe(failure?.message);
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
   });
 });

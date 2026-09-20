@@ -103,6 +103,7 @@ describe("createGeminiLiveGrant", () => {
     expect(grant.kind).toBe(GEMINI_GRANT.kind);
     expect(grant.token).toBe("auth_tokens/abc123");
     expect(grant.expiresAt).toBe("2026-09-19T12:30:00.000Z");
+    expect(grant.endpoint).toBe(GEMINI_GRANT.endpoint);
     expect(grant.endpoint.startsWith("wss://generativelanguage.googleapis.com/ws/")).toBe(true);
     expect(grant.endpoint).toContain("BidiGenerateContentConstrained");
     expect(grant.endpoint).not.toContain("?");

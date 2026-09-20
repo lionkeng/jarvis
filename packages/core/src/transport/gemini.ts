@@ -81,25 +81,26 @@ export class GeminiLiveChannel implements LiveChannel {
 
   async open(host: LiveChannelHost): Promise<void> {
     this.#host = host;
-    const grant = await host.grant();
-    host.guard();
-    if (grant.kind !== "websocket-token") throw new Error("Session endpoint returned an invalid Live session");
-    this.#grant = grant;
     const audio = new PcmDuplex({ capture: (pcm16, rate) => this.#speak(pcm16, rate) });
     try {
+      // The grant must reach a socket within a minute of minting, so the microphone prompt comes first.
       await audio.start();
       host.guard();
       if (this.#released) throw new Error("Live connection cancelled");
+      this.#audio = audio;
+      const grant = await host.grant();
+      host.guard();
+      if (grant.kind !== "websocket-token") throw new Error("Session endpoint returned an invalid Live session");
+      this.#grant = grant;
+      await this.#dial(undefined, false);
+      host.guard();
+      this.#arm(grant);
+      host.emit({ type: "agent-track", stream: audio.stream, track: audio.track, continuous: true });
+      this.#running = host.started();
     } catch (error) {
       await audio.close();
       throw error;
     }
-    this.#audio = audio;
-    await this.#dial(undefined, false);
-    host.guard();
-    this.#arm(grant);
-    host.emit({ type: "agent-track", stream: audio.stream, track: audio.track, continuous: true });
-    this.#running = host.started();
   }
 
   submitToolResult(result: RealtimeToolResult): void {
@@ -142,7 +143,10 @@ export class GeminiLiveChannel implements LiveChannel {
   async #dial(handle: string | undefined, resumed: boolean): Promise<WebSocket> {
     const grant = this.#grant;
     if (!grant || this.#released || this.#closing) throw new Error("Live connection cancelled");
-    const socket = new WebSocket(`${grant.endpoint}?access_token=${encodeURIComponent(grant.token)}`);
+    let socket: WebSocket;
+    // A constructor failure quotes the URL it was given, and that URL carries the token.
+    try { socket = new WebSocket(`${grant.endpoint}?access_token=${encodeURIComponent(grant.token)}`); }
+    catch { throw new Error("Live connection could not be opened"); }
     socket.binaryType = "arraybuffer";
     this.#sockets.add(socket);
     let ready: () => void = () => undefined;
@@ -181,6 +185,8 @@ export class GeminiLiveChannel implements LiveChannel {
     this.#socket = socket;
     this.#resumed = dial.resumed;
     this.#adoptedAt = Date.now();
+    // The old socket can still carry a result until this one takes over.
+    if (dial.resumed) this.#tools.clear();
     if (previous && previous !== socket) {
       this.#sockets.delete(previous);
       shut(previous);
@@ -190,9 +196,10 @@ export class GeminiLiveChannel implements LiveChannel {
 
   #enqueue(socket: WebSocket, data: unknown): void {
     this.#queue = this.#queue.then(async () => {
-      const text = await asText(data);
-      try { this.#route(socket, text); }
-      catch (error) { this.#host?.emit({ type: "error", error: error instanceof Error ? error : new Error(String(error)) }); }
+      try { this.#route(socket, await asText(data)); }
+      catch (error) {
+        if (socket === this.#socket) this.#fail(error instanceof Error ? error : new Error(String(error)));
+      }
     }).catch(() => undefined);
   }
 
@@ -210,7 +217,8 @@ export class GeminiLiveChannel implements LiveChannel {
       return;
     }
     const resumption = record(message.sessionResumptionUpdate);
-    if (resumption) this.#handle = resumption.resumable === true && typeof resumption.newHandle === "string" ? resumption.newHandle : undefined;
+    // A non-resumable update means "not yet", not "forget the handle you hold".
+    if (resumption?.resumable === true && typeof resumption.newHandle === "string" && resumption.newHandle) this.#handle = resumption.newHandle;
     const cancellation = record(message.toolCallCancellation);
     if (cancellation) this.#tools.drop(cancellation.ids);
     const content = record(message.serverContent);
@@ -220,7 +228,10 @@ export class GeminiLiveChannel implements LiveChannel {
       this.#flushHeard(host);
       for (const event of this.#tools.receive(call)) host.emit(event);
     }
-    if (message.goAway !== undefined) this.#resume();
+    if (message.goAway !== undefined) {
+      if (this.#stable()) this.#resume();
+      else this.#fail(new Error(lost("Live connection lost to a goAway on a new socket", undefined)));
+    }
   }
 
   #content(host: LiveChannelHost, content: Record<string, unknown>): void {
@@ -270,7 +281,6 @@ export class GeminiLiveChannel implements LiveChannel {
       return;
     }
     this.#resuming = true;
-    this.#tools.clear();
     void this.#reconnect(handle).then(
       () => { this.#resuming = false; },
       (error: unknown) => {
@@ -318,8 +328,11 @@ export class GeminiLiveChannel implements LiveChannel {
 
   #recoverable(code: number): boolean {
     if (FATAL_CLOSE_CODES.includes(code) || this.#handle === undefined) return false;
-    return !this.#resumed || Date.now() - this.#adoptedAt >= RECONNECT_FLOOR_MS;
+    return this.#stable();
   }
+
+  // A reconnected socket that dies inside the floor is a loop, and every pass mints a token.
+  #stable(): boolean { return !this.#resumed || Date.now() - this.#adoptedAt >= RECONNECT_FLOOR_MS; }
 
   #fail(error: Error): void {
     if (this.#released || this.#closing) return;

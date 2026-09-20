@@ -181,6 +181,18 @@ describe("PCM duplex", () => {
     expect(h.playback().close).toHaveBeenCalledOnce();
   });
 
+  it("releases the microphone when the playback context cannot be built", async () => {
+    const h = stubAudio();
+    vi.stubGlobal("AudioContext", class extends FakeContext {
+      constructor(options: { sampleRate?: number } = {}) {
+        super(options);
+        if (options.sampleRate === 24_000) throw new Error("hardware in use");
+      }
+    });
+    await expect(h.duplex.start()).rejects.toThrow("hardware in use");
+    expect(h.microphoneTrack.stop).toHaveBeenCalledOnce();
+  });
+
   it("rebuilds the capture context at the device rate when the pinned rate is refused", async () => {
     const h = stubAudio();
     vi.stubGlobal("AudioContext", class extends FakeContext {
