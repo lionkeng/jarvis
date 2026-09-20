@@ -227,6 +227,8 @@ Optional, with defaults:
 
 `MAX_OUTPUT_TOKENS` caps delegated Responses output on OpenAI. It does not cap spoken audio, and Gemini does not use it.
 
+The rate window, the session budget, and the lifetime-stream cap are counted per normalized origin, so `https://voice.example`, `HTTPS://VOICE.example:443`, and `https://voice.example/x` spend the same counters. When `ALLOWED_ORIGINS` lists a loopback origin, the BFF accepts every `http` or `https` origin on `localhost`, `127.0.0.1`, or `::1` at any port, and all of them share one set of counters.
+
 `LIVE_PROVIDERS` orders the keyed providers on the lease, as in `LIVE_PROVIDERS=gemini-live,openai-live`. The first entry wins when a host pins no protocol. List only protocols whose key you set. An unkeyed entry stops startup, and so does a repeated or unknown name. The default order follows the keys the BFF holds.
 
 There is no `GEMINI_LIVE_BACKEND_MODEL`. Setting it stops startup, because Gemini Live has no delegation protocol. Choose Gemini reasoning with `GEMINI_LIVE_MODEL` instead.
