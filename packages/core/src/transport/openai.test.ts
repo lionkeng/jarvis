@@ -22,7 +22,8 @@ function brokerLease() {
 
 function stubConnection(autoStart = true) {
   const listeners = new Map<string, (event: { data: string }) => void>();
-  const deliver = (event: unknown) => listeners.get("message")?.({ data: JSON.stringify(event) });
+  const raw = (data: string) => listeners.get("message")?.({ data });
+  const deliver = (event: unknown) => raw(JSON.stringify(event));
   const channel = {
     readyState: "connecting",
     send: vi.fn(), close: vi.fn(),
@@ -60,7 +61,7 @@ function stubConnection(autoStart = true) {
   const created = () => backend({ type: "response.created", response: { id: "resp_1", output: [] } });
   const completed = () => backend({ type: "response.completed", response: { id: "resp_1", output: [] } });
   const sent = () => channel.send.mock.calls.map(([json]) => JSON.parse(String(json)));
-  return { transport, channel, peer, constructed, track, fetcher, lease, deliver, close, backend, call, created, completed, sent };
+  return { transport, channel, peer, constructed, track, fetcher, lease, raw, deliver, close, backend, call, created, completed, sent };
 }
 
 function stubMultipleConnections() {
@@ -307,6 +308,35 @@ describe("Live connection", () => {
     await closing;
     expect(events).toEqual(["connected", "error", "disconnected"]);
     expect(h.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("ends the session when a frame handler throws", async () => {
+    const h = stubConnection();
+    const types: string[] = [];
+    h.transport.subscribe((event) => {
+      types.push(event.type);
+      if (event.type === "tool-call") throw new Error("host listener failed");
+    });
+    await h.transport.connect("/session");
+    h.created();
+    h.call("call_a");
+    h.completed();
+    expect(types).toEqual(["connected", "tool-call", "error", "disconnected"]);
+    expect(h.transport.connected).toBe(false);
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    expect(h.peer.close).toHaveBeenCalledOnce();
+  });
+
+  it("ends the session when a frame is not valid JSON", async () => {
+    const h = stubConnection();
+    const types: string[] = [];
+    h.transport.subscribe((event) => types.push(event.type));
+    await h.transport.connect("/session");
+    h.raw("{");
+    expect(types).toEqual(["connected", "error", "disconnected"]);
+    expect(h.transport.connected).toBe(false);
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    expect(h.peer.close).toHaveBeenCalledOnce();
   });
 
   it("cancels delayed microphone setup and stops late media without calling the broker", async () => {
