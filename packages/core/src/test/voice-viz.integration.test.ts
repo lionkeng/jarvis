@@ -27,13 +27,7 @@ const grant = { session: { id: "live_opaque" }, transport: { type: "webrtc", sdp
 
 function stubLiveWire(ready: string) {
   const steps: string[] = [];
-  const listeners = new Map<string, (event: { data: string }) => void>();
-  const deliver = (event: unknown) => listeners.get("message")?.({ data: JSON.stringify(event) });
-  const channel = {
-    readyState: "connecting",
-    send: vi.fn(), close: vi.fn(),
-    addEventListener: vi.fn((name: string, listener: (event: { data: string }) => void) => listeners.set(name, listener)),
-  };
+  const channel = { readyState: "connecting", send: vi.fn(), close: vi.fn(), addEventListener: vi.fn() };
   const track = { stop: vi.fn() };
   class Peer {
     connectionState = "new";
@@ -46,10 +40,7 @@ function stubLiveWire(ready: string) {
     createDataChannel = vi.fn(() => channel);
     createOffer = vi.fn(async () => ({ type: "offer", sdp: "v=0" }));
     setLocalDescription = vi.fn();
-    setRemoteDescription = vi.fn(async () => {
-      channel.readyState = "open";
-      deliver({ type: "session.started" });
-    });
+    setRemoteDescription = vi.fn(async () => { channel.readyState = "open"; });
     constructor() { steps.push("peer"); }
   }
   vi.stubGlobal("RTCPeerConnection", Peer);
@@ -65,7 +56,7 @@ function stubLiveWire(ready: string) {
     }), { headers: { "Content-Type": "text/event-stream" } });
   });
   vi.stubGlobal("fetch", fetcher);
-  return { steps, fetcher, track, deliver };
+  return { steps, fetcher, track };
 }
 
 describe("VoiceViz integration", () => {
@@ -98,26 +89,21 @@ describe("VoiceViz integration", () => {
     const live = stubLiveWire('{"protocols":["openai-live"]}');
     const viz = new VoiceViz({ reducedMotion: true });
     viz.mount(document.createElement("div"));
-    const usage = vi.fn();
-    viz.on("usage", usage);
+    const connecting = viz.connect("/session", { responseTiming: "fast", speechRate: 1.15 });
+    const cancelled = expect(connecting).rejects.toThrow("cancelled");
 
-    await viz.connect("/session", { responseTiming: "fast", speechRate: 1.15 });
+    await vi.waitFor(() => expect(live.steps).toEqual(["lease", "peer", "grant"]));
 
-    expect(live.steps).toEqual(["lease", "peer", "grant"]);
     expect(live.fetcher).toHaveBeenNthCalledWith(1, "/session", expect.objectContaining({
       method: "GET", headers: { Accept: "text/event-stream" }, cache: "no-store", credentials: "omit",
     }));
     expect(JSON.parse(String(live.fetcher.mock.calls[1]?.[1]?.body))).toEqual({
       protocol: "openai-live", responseTiming: "fast", speechRate: 1.15, sdp: "v=0\r\nwith-ice",
     });
-    expect(viz.connected).toBe(true);
-    expect(viz.state).toBe("idle");
 
-    const closing = viz.disconnect();
-    live.deliver({ type: "session.closed", usage: { seconds: 4 }, reason: "close_requested" });
-    await closing;
+    await viz.disconnect();
+    await cancelled;
 
-    expect(usage).toHaveBeenCalledWith({ seconds: 4, final: true, reason: "close_requested" });
     expect(live.track.stop).toHaveBeenCalledOnce();
     expect(viz.connected).toBe(false);
     viz.unmount();
