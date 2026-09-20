@@ -18,6 +18,8 @@ import type { TranscriptSnapshot } from "./transcript/types.js";
 import { LiveTransport } from "./transport/live-transport.js";
 import type { NormalizedRealtimeEvent, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "./transport/types.js";
 
+const AUDIBLE_LEVEL = 0.035;
+
 export interface VoiceVizOptions {
   presets?: readonly PresetName[];
   theme?: ThemeInput;
@@ -71,6 +73,8 @@ export class VoiceViz {
   #unmounted = false;
   #continuousAudio = false;
   #lastVoicedAt = -Infinity;
+  /** The analyser level trails agent audio the user cut off, so that tail must not re-derive speaking. */
+  #bargeInTail = false;
 
   constructor(options?: VoiceVizOptions);
   /** @deprecated Pass options to the constructor and call mount(container). */
@@ -124,15 +128,18 @@ export class VoiceViz {
       const size = renderer.size;
       this.#regions = computeRegions(size.width, size.height, { placement: this.#placement, breakpoint: this.#breakpoint });
       const features = this.#analyser?.sample(now) ?? this.#featureSource?.sample(now) ?? this.#idleFeatureSource.sample(now);
+      const audible = features.voiced || features.level >= AUDIBLE_LEVEL;
       if (this.#continuousAudio && this.connected) {
-        if (features.voiced || features.level >= 0.035) {
+        if (this.#bargeInTail) {
+          if (!audible) this.#bargeInTail = false;
+        } else if (audible) {
           this.#lastVoicedAt = now;
           this.#dispatch({ type: "agent-audio-started" });
         } else if (now - this.#lastVoicedAt >= 350 && this.state === "speaking") {
           this.#dispatch({ type: "agent-audio-stopped" });
         }
       }
-      const sync = this.#audioText.tick(now, features.voiced || features.level >= 0.035);
+      const sync = this.#audioText.tick(now, audible);
       if (sync.audioStarted) this.#dispatch({ type: "agent-audio-started" });
       if (sync.completed) this.#completeAgentResponse(now);
       const frameTheme = themeForFrame(this.#theme, this.#state.snapshot.state, now);
@@ -266,6 +273,7 @@ export class VoiceViz {
         break;
       }
       case "user-speech-started":
+        if (this.#continuousAudio) this.#bargeInTail = true;
         if (this.#audioText.interrupt() || this.#state.snapshot.state === "speaking") {
           this.#panel.finish(now);
           this.transcript.complete("agent", "interrupted", now);
@@ -366,6 +374,7 @@ export class VoiceViz {
   #detachAudio(): void {
     this.#continuousAudio = false;
     this.#lastVoicedAt = -Infinity;
+    this.#bargeInTail = false;
     void this.#analyser?.dispose();
     this.#analyser = undefined;
     if (this.#audio) {
