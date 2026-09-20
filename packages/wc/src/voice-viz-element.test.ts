@@ -8,19 +8,33 @@ class FakeTransport implements RealtimeTransport {
   readonly agentAudio = null;
   readonly endpoints: string[] = [];
   disconnects = 0;
-  async connect(tokenEndpoint: string): Promise<void> {
+  #cancel: ((error: Error) => void) | undefined;
+  constructor(readonly holdConnect = false) {}
+  connect(tokenEndpoint: string): Promise<void> {
     this.endpoints.push(tokenEndpoint);
+    if (this.holdConnect) return new Promise<void>((_resolve, reject) => { this.#cancel = reject; });
     this.connected = true;
+    return Promise.resolve();
   }
   disconnect(): void {
     this.disconnects += 1;
     this.connected = false;
+    this.#cancel?.(new Error("Live connection cancelled"));
+    this.#cancel = undefined;
   }
   subscribe(): () => void {
     return () => {};
   }
   submitToolResult(): void {}
 }
+
+interface RejectionHost {
+  on(name: "unhandledRejection", listener: (reason: unknown) => void): void;
+  off(name: "unhandledRejection", listener: (reason: unknown) => void): void;
+}
+
+const rejectionHost = (globalThis as { process?: RejectionHost }).process;
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("VoiceVizElement", () => {
   beforeEach(() => {
@@ -130,7 +144,57 @@ describe("VoiceVizElement", () => {
     element.remove();
   });
 
-  it("adds no observed attribute for the transport", () => {
-    expect(VoiceVizElement.observedAttributes).toEqual(["presets", "theme", "panel-placement"]);
+  it("honors a transport assigned before the element is defined", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: string) => { requests.push(input); return new Promise<Response>(() => {}); }));
+    const transport = new FakeTransport();
+    const element = document.createElement("jarvis-voice-viz-late");
+    element.setAttribute("token-endpoint", "/live-session");
+    element.setAttribute("auto-connect", "");
+    document.body.append(element);
+    (element as { transport?: RealtimeTransport }).transport = transport;
+    if (!customElements.get("jarvis-voice-viz-late")) customElements.define("jarvis-voice-viz-late", class extends VoiceVizElement {});
+    await flush();
+    expect((element as VoiceVizElement).transport).toBe(transport);
+    expect(requests).toEqual([]);
+    expect(transport.endpoints).toEqual(["/live-session"]);
+    element.remove();
+  });
+
+  it("re-runs auto-connect on a transport swapped in while the first connect is pending", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => { rejections.push(reason); };
+    rejectionHost?.on("unhandledRejection", onRejection);
+    const first = new FakeTransport(true);
+    const second = new FakeTransport();
+    const element = document.createElement("jarvis-voice-viz") as VoiceVizElement;
+    element.setAttribute("token-endpoint", "/live-session");
+    element.setAttribute("auto-connect", "");
+    element.transport = first;
+    document.body.append(element);
+    expect(first.endpoints).toEqual(["/live-session"]);
+    expect(first.connected).toBe(false);
+    element.transport = second;
+    expect(first.disconnects).toBe(1);
+    expect(second.endpoints).toEqual(["/live-session"]);
+    await flush();
+    rejectionHost?.off("unhandledRejection", onRejection);
+    expect(rejections).toEqual([]);
+    await element.disconnect();
+    element.remove();
+  });
+
+  it("ignores a transport attribute and still connects through the default transport", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: string) => { requests.push(input); return Promise.reject(new Error("no broker")); }));
+    const element = document.createElement("jarvis-voice-viz") as VoiceVizElement;
+    element.setAttribute("transport", "x");
+    element.setAttribute("live-provider", "gemini-live");
+    element.setAttribute("token-endpoint", "/live-session");
+    document.body.append(element);
+    expect(element.transport).toBeUndefined();
+    await expect(element.connect()).rejects.toThrow(/broker/i);
+    expect(requests).toEqual(["/live-session"]);
+    element.remove();
   });
 });
