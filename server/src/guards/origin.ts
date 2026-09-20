@@ -3,6 +3,19 @@ function isLoopbackHost(hostname: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
+// A serialized origin always contains "://", so this key cannot collide with one.
+const LOOPBACK_BUCKET = "loopback";
+
+export interface AdmittedOrigin {
+  /** Normalized form of the request's Origin header. Echo this in CORS headers. */
+  readonly origin: string;
+  /**
+   * Key for every per-origin counter. Every spelling of one origin maps to the same key.
+   * The loopback rule accepts any loopback host and port, so all loopback origins share one key.
+   */
+  readonly bucket: string;
+}
+
 export class OriginGuard {
   readonly #allowed: Set<string>;
   readonly #allowLoopback: boolean;
@@ -12,16 +25,20 @@ export class OriginGuard {
     this.#allowLoopback = [...this.#allowed].some((origin) => isLoopbackHost(new URL(origin).hostname));
   }
 
-  allows(origin: string | null): boolean {
-    if (!origin) return false;
+  admit(origin: string | null): AdmittedOrigin | undefined {
+    if (!origin) return undefined;
+    let url: URL;
     try {
-      const url = new URL(origin);
-      if (this.#allowed.has(url.origin)) return true;
-      if (!this.#allowLoopback) return false;
-      if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-      return isLoopbackHost(url.hostname);
+      url = new URL(origin);
     } catch {
-      return false;
+      return undefined;
     }
+    const loopback = this.#allowLoopback && (url.protocol === "http:" || url.protocol === "https:") && isLoopbackHost(url.hostname);
+    if (!loopback && !this.#allowed.has(url.origin)) return undefined;
+    return { origin: url.origin, bucket: loopback ? LOOPBACK_BUCKET : url.origin };
+  }
+
+  allows(origin: string | null): boolean {
+    return this.admit(origin) !== undefined;
   }
 }
