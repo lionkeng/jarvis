@@ -130,6 +130,22 @@ describe("VoiceDemoTransport", () => {
     transport.disconnect();
   });
 
+  it("gives separate instances distinct call ids for the same script", async () => {
+    vi.useFakeTimers();
+    const callIds: string[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      const transport = new VoiceDemoTransport();
+      const events: NormalizedRealtimeEvent[] = [];
+      transport.subscribe((event) => events.push(event));
+      await transport.connect();
+      transport.playScript("navigate");
+      await vi.advanceTimersByTimeAsync(200);
+      callIds.push(toolCallFrom(events).callId);
+      transport.disconnect();
+    }
+    expect(callIds[0]).not.toBe(callIds[1]);
+  });
+
   it("ignores late script callbacks after disconnect", async () => {
     vi.useFakeTimers();
     const transport = new VoiceDemoTransport();

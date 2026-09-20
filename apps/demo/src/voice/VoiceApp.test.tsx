@@ -404,6 +404,24 @@ describe("VoiceApp", () => {
     await unmountApp(root, host);
   });
 
+  it("replays a simulated script after a source round trip", async () => {
+    const { host, root } = await mountApp();
+    await act(async () => { namedButton(host, ".scripts", "Open the library").click(); });
+    await settle();
+    expect(host.querySelector("#library-title")).not.toBeNull();
+    await act(async () => { namedLink(host, "dashboard").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await settle();
+    expect(host.querySelector("#dashboard-title")).not.toBeNull();
+    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
+    await settle();
+    await act(async () => { namedButton(host, ".toolbar", "Simulation").click(); });
+    await settle();
+    await act(async () => { namedButton(host, ".scripts", "Open the library").click(); });
+    await settle();
+    expect(host.querySelector("#library-title")).not.toBeNull();
+    await unmountApp(root, host);
+  });
+
   it("answers an ordinary question without mutating UI state and cleans up on unmount", async () => {
     const { host, root } = await mountApp();
     await act(async () => { namedButton(host, ".scripts", "Ask an ordinary question").click(); });
