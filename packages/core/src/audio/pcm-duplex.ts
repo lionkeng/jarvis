@@ -57,10 +57,12 @@ export class PcmDuplex {
   async start(): Promise<void> {
     const microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
     if (this.#closed) { stopTracks(microphone); throw new Error("Live audio is closed"); }
-    const playback = new AudioContext({ sampleRate: PCM_PLAYBACK_RATE, latencyHint: "interactive" });
-    const url = URL.createObjectURL(new Blob([PROCESSOR_SOURCE], { type: "text/javascript" }));
+    let playback: AudioContext | undefined;
     let capture: AudioContext | undefined;
+    let url: string | undefined;
     try {
+      playback = new AudioContext({ sampleRate: PCM_PLAYBACK_RATE, latencyHint: "interactive" });
+      url = URL.createObjectURL(new Blob([PROCESSOR_SOURCE], { type: "text/javascript" }));
       const opened = await openCapture(url, microphone, true);
       capture = opened.capture;
       if (this.#closed) throw new Error("Live audio is closed");
@@ -77,10 +79,10 @@ export class PcmDuplex {
       void playback.resume();
     } catch (error) {
       stopTracks(microphone);
-      await Promise.all([capture ? close(capture) : undefined, close(playback)]);
+      await Promise.all([capture ? close(capture) : undefined, playback ? close(playback) : undefined]);
       throw error;
     } finally {
-      URL.revokeObjectURL(url);
+      if (url !== undefined) URL.revokeObjectURL(url);
     }
   }
 
