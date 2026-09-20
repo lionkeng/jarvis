@@ -156,7 +156,7 @@ export class OpenAILiveChannel implements LiveChannel {
         }
       }
     } catch (error) {
-      host.emit({ type: "error", error: error instanceof Error ? error : new Error(String(error)) });
+      this.#end(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
