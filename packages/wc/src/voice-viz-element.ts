@@ -16,6 +16,7 @@ export class VoiceVizElement extends HTMLElement {
     this.#mount = document.createElement("div");
     this.#mount.className = "mount";
     this.#root.append(style, this.#mount);
+    this.#upgradeTransport();
   }
 
   connectedCallback(): void {
@@ -23,7 +24,7 @@ export class VoiceVizElement extends HTMLElement {
       this.#instance = new VoiceViz(this.#options());
       this.#instance.mount(this.#mount);
     }
-    if (this.hasAttribute("auto-connect") && this.tokenEndpoint) void this.connect();
+    this.#autoConnect();
   }
 
   disconnectedCallback(): void {
@@ -68,6 +69,7 @@ export class VoiceVizElement extends HTMLElement {
     this.#instance.unmount();
     this.#instance = new VoiceViz(this.#options());
     this.#instance.mount(this.#mount);
+    this.#autoConnect();
   }
 
   async connect(): Promise<void> {
@@ -77,6 +79,21 @@ export class VoiceVizElement extends HTMLElement {
 
   async disconnect(): Promise<void> {
     await this.#instance?.disconnect();
+  }
+
+  #autoConnect(): void {
+    if (!this.isConnected || !this.hasAttribute("auto-connect") || !this.tokenEndpoint) return;
+    // A swap or a removal cancels this connect. A real failure still shows as the visualization's failed state.
+    void this.#instance?.connect(this.tokenEndpoint).catch(() => undefined);
+  }
+
+  // An own `transport` assigned before the element upgrades shadows this accessor, so re-assign it through the setter.
+  #upgradeTransport(): void {
+    if (!Object.prototype.hasOwnProperty.call(this, "transport")) return;
+    const own = this as { transport?: RealtimeTransport };
+    const value = own.transport;
+    delete own.transport;
+    this.transport = value;
   }
 
   #presets(): PresetName[] {

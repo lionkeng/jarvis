@@ -89,13 +89,15 @@ A host that passes no transport gets the default. The default reads the broker's
 
 The BFF mints one single-use ephemeral token per Gemini connection. The token expires after 30 minutes and has 1 minute to start a session. Google locks the model and every setup field the token's field mask names. The browser cannot change the tools, the system instruction, the voice, or transcription. `sessionResumption` is the one setup field the mask leaves open, which is how the browser carries its resumption handle into a new connection.
 
-The browser then opens the WebSocket to Google itself. The BFF never sees conversation audio, transcripts, or tool calls, and `GEMINI_API_KEY` stays in the Bun process.
+On first connect the channel acquires the microphone before it asks the broker for a grant. A denied prompt mints no token and spends no rate-limit slot, and the token's 1 minute start window does not run while the prompt is open.
+
+The browser then opens the WebSocket to Google itself. The BFF never sees conversation audio, transcripts, or tool calls, and `GEMINI_API_KEY` stays in the Bun process. A frame from Google that cannot be decoded ends the session with an `error` event.
 
 Audio is 16-bit PCM. Capture runs at 16 kHz and playback at 24 kHz. A browser that refuses a 16 kHz capture context falls back to the device rate, and each audio frame states the rate it carries. Agent audio plays into a `MediaStream` that `VoiceViz` monitors, so it never reaches the speakers a second time. When Google reports an interruption, the channel clears queued playback at once.
 
 Google closes each connection after about 10 minutes. Google's documentation describes a `goAway` message before the close. In live runs the connection closed with code 1011 and no `goAway`. The channel reconnects on either signal.
 
-A reconnect asks the broker for a fresh grant, then dials with the new token and the latest resumption handle. A single-use token cannot open a second connection, so every reconnect is another `POST /session`. The reconnect keeps the same agent audio stream and emits no `disconnected` and no second `connected`. It drops pending tool calls.
+A reconnect asks the broker for a fresh grant, then dials with the new token and the most recent resumable handle. A resumption update marked non-resumable leaves the last good handle in place. A single-use token cannot open a second connection, so every reconnect is another `POST /session`. The reconnect keeps the same agent audio stream and emits no `disconnected` and no second `connected`. Pending tool calls are dropped when the reconnected socket takes over, not when the reconnect starts.
 
 That second POST passes the origin guard, the rate limit, and the per-origin session budget, and spends one slot of each. A long Gemini session therefore draws down the session budget as it runs. Size `SESSION_BUDGET_REQUESTS` for roughly one reconnect every 10 minutes per live session.
 
@@ -105,7 +107,7 @@ The channel fails closed instead of reconnecting when:
 - the close code is 1007 or 1008
 - the new grant fails, including a 429 from the broker
 - the dial fails
-- a reconnected socket closes within 10 seconds of its own setup
+- a reconnected socket closes or receives `goAway` within 10 seconds of its own setup
 
 Each grant expires 30 minutes after the BFF mints it, and the expiry timer follows the newest grant. A reconnect therefore extends the session. The locked setup keeps sliding-window context compression on, so a long conversation does not end on context length.
 
@@ -191,6 +193,8 @@ To pin a protocol, assign the `transport` property before the element connects.
 ```
 
 `transport` is a JavaScript property, so it takes an object rather than a string. The element has no `live-provider` attribute. Assigning it during a live session throws; disconnect first.
+
+A `transport` assigned before `defineVoiceVizElement()` runs is honored, so a host can pin a protocol on a parsed element and define the tag afterwards. A later assignment while the element is idle or still connecting rebuilds the instance and cancels the connect in flight. An element that carries `auto-connect` then connects the new transport once.
 
 The existing React `tokenEndpoint` prop and web component `token-endpoint` attribute name the broker URL. Their names remain compatible with existing hosts. The custom element renders inside Shadow DOM. Available themes are `cyan`, `amber`, `rose`,
 `spectrum`, `coast`, `ultraviolet`, and `magenta`.
