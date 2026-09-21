@@ -28,6 +28,11 @@ describe("OriginGuard", () => {
     expect(guard.admit("https://attacker.test")).toBeUndefined();
     expect(guard.admit(null)).toBeUndefined();
     expect(guard.admit("not a url")).toBeUndefined();
+    expect(guard.admit("null")).toBeUndefined();
+  });
+  test("admits nothing for a non-http protocol wrapping an allowed origin", () => {
+    expect(guard.admit("blob:http://localhost:5180/x")).toBeUndefined();
+    expect(guard.admit("blob:https://voice.example.com/x")).toBeUndefined();
   });
   test("rejects suffix tricks, missing origins, and invalid URLs", () => {
     expect(guard.allows("https://voice.example.com.attacker.test")).toBe(false);
