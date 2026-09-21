@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const failures = [];
@@ -23,16 +23,23 @@ for (const lock of [join(root, "bun.lock"), join(root, "bun.lockb"), join(root, 
 }
 
 const coreSource = join(root, "packages/core/src");
+const coreClassNames = new Set();
 for (const file of sourceFiles(coreSource)) {
   const text = readFileSync(file, "utf8");
-  if (file.includes("/render/") && /from ["'][^"']*(?:transport\/openai|audio\/media-stream-analyser)/.test(text)) {
+  const corePath = relative(coreSource, file).split(sep).join("/");
+  // transport/types.ts is the normalized contract, so it gets no raw-name exemption.
+  const rawNamesAllowed = corePath.startsWith("transport/") && corePath !== "transport/types.ts";
+  if (!corePath.endsWith(".test.ts")) {
+    for (const [, name] of text.matchAll(/\bclass\s+([A-Za-z_$][\w$]*)/g)) coreClassNames.add(name);
+  }
+  if (corePath.startsWith("render/") && /from ["'][^"']*(?:transport\/(?!types(?:\.js)?["'])|audio\/media-stream-analyser)/.test(text)) {
     fail(file, "renderer code may consume leaf contracts, not transport or analyser implementations");
   }
-  if (!file.includes("/transport/") && /(?:session\.(?:input_transcript|output_transcript|close|started|usage|delegation)|input_audio_buffer\.|response\.(?:event|output_item|item|completed|failed|incomplete|cancelled|audio|output_audio|audio_transcript|output_audio_transcript|text|output_text|function_call_arguments|create\b)|conversation\.item\.(?:input_audio_transcription|create)|function_call_output)/.test(text)) {
-    fail(file, "raw OpenAI event names belong only in transport/");
+  if (!rawNamesAllowed && /(?:session\.(?:input_transcript|output_transcript|close|started|usage|delegation)|input_audio_buffer\.|response\.(?:event|output_item|item|completed|failed|incomplete|cancelled|audio|output_audio|audio_transcript|output_audio_transcript|text|output_text|function_call_arguments|create\b)|conversation\.item\.(?:input_audio_transcription|create)|function_call_output)/.test(text)) {
+    fail(file, "raw OpenAI event names belong only in transport/ channel implementations");
   }
-  if (!file.includes("/transport/") && /\b(?:BidiGenerateContent|realtimeInput|serverContent|setupComplete|modelTurn|inlineData|turnComplete|generationComplete|inputTranscription|outputTranscription|toolCallCancellation|functionCalls|functionResponses|toolResponse|sessionResumption|sessionResumptionUpdate|goAway|activityStart|activityEnd|audioStreamEnd)\b/.test(text)) {
-    fail(file, "raw Gemini Live event names belong only in transport/");
+  if (!rawNamesAllowed && /\b(?:BidiGenerateContent|realtimeInput|serverContent|setupComplete|modelTurn|inlineData|turnComplete|generationComplete|inputTranscription|outputTranscription|toolCallCancellation|functionCalls|functionResponses|toolResponse|sessionResumption|sessionResumptionUpdate|goAway|activityStart|activityEnd|audioStreamEnd)\b/.test(text)) {
+    fail(file, "raw Gemini Live event names belong only in transport/ channel implementations");
   }
 }
 
@@ -78,11 +85,13 @@ for (const file of packageManifests(root)) {
 }
 
 const coreIndex = join(coreSource, "index.ts");
-if (existsSync(coreIndex)) {
-  const text = readFileSync(coreIndex, "utf8");
-  for (const forbidden of ["OpenAILiveTransport", "OpenAIRealtimeTransport", "CanvasRenderer", "Visualizer"]) {
-    if (text.includes(forbidden)) fail(coreIndex, `${forbidden} is an internal implementation, not a public export`);
+const forbiddenCoreExports = ["LiveTransport", "OpenAILiveChannel", "GeminiLiveChannel", "BrokerLease", "PcmDuplex", "CanvasRenderer"];
+const indexText = existsSync(coreIndex) ? readFileSync(coreIndex, "utf8") : "";
+for (const forbidden of forbiddenCoreExports) {
+  if (!coreClassNames.has(forbidden)) {
+    fail(import.meta.filename, `${forbidden} is on the forbidden core export list but packages/core/src declares no such class; update the list to the classes that exist`);
   }
+  if (new RegExp(`\\b${forbidden}\\b`).test(indexText)) fail(coreIndex, `${forbidden} is an internal implementation, not a public export`);
 }
 
 const serverSource = join(root, "server/src");
