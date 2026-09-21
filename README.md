@@ -87,7 +87,7 @@ A host that passes no transport gets the default. The default reads the broker's
 
 ## Gemini live path
 
-The BFF mints one single-use ephemeral token per Gemini connection. The token expires after 30 minutes and has 1 minute to start a session. Google locks the model and every setup field the token's field mask names. The browser cannot change the tools, the system instruction, the voice, or transcription. `sessionResumption` is the one setup field the mask leaves open, which is how the browser carries its resumption handle into a new connection.
+The BFF mints one single-use ephemeral token per Gemini connection. The token expires after 30 minutes and has 1 minute to start a session. Google locks every setup field the token's field mask names. The browser cannot change the model, the tools, the system instruction, the voice, or transcription. A setup field outside the mask is not locked. `sessionResumption` stays outside the mask, so the browser sends its resumption handle in a new connection.
 
 On first connect the channel acquires the microphone before it asks the broker for a grant. A denied prompt mints no token and spends no rate-limit slot, and the token's 1 minute start window does not run while the prompt is open.
 
