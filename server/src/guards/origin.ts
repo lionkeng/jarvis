@@ -33,7 +33,9 @@ export class OriginGuard {
     } catch {
       return undefined;
     }
-    const loopback = this.#allowLoopback && (url.protocol === "http:" || url.protocol === "https:") && isLoopbackHost(url.hostname);
+    // A non-http protocol can carry an allowed origin ("blob:http://localhost:5180/x"), which would bucket apart from its plain spelling.
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    const loopback = this.#allowLoopback && isLoopbackHost(url.hostname);
     if (!loopback && !this.#allowed.has(url.origin)) return undefined;
     return { origin: url.origin, bucket: loopback ? LOOPBACK_BUCKET : url.origin };
   }
