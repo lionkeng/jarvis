@@ -1,4 +1,5 @@
-import type { RouteId } from "./interaction-contract.js";
+export const ROUTE_IDS = ["dashboard", "library", "article", "settings"] as const;
+export type RouteId = (typeof ROUTE_IDS)[number];
 
 export interface HashRouter {
   subscribe(onStoreChange: () => void): () => void;

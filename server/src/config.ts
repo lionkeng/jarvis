@@ -18,6 +18,11 @@ export interface GeminiProviderConfig {
 
 export type LiveProviderConfig = OpenAIProviderConfig | GeminiProviderConfig;
 
+export interface TypeSafeConfig {
+  apiKey: string;
+  model: string;
+}
+
 export interface ServerConfig {
   providers: [LiveProviderConfig, ...LiveProviderConfig[]];
   allowedOrigins: string[];
@@ -27,6 +32,10 @@ export interface ServerConfig {
   sessionBudgetRequests: number;
   sessionBudgetWindowMs: number;
   lifetimeStreamsPerOrigin: number;
+  /** Absent when no TYPESAFE_API_KEY is set. The /interpret route then answers 503 and the rest of the server boots as before. */
+  typesafe: TypeSafeConfig | undefined;
+  interpretRateLimitRequests: number;
+  interpretRateLimitWindowMs: number;
 }
 
 function positiveInteger(name: string, value: string | undefined, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
@@ -55,6 +64,12 @@ function geminiModel(value: string | undefined): string {
     throw new Error(`GEMINI_LIVE_MODEL must be one of ${GEMINI_LIVE_MODELS.join(", ")}`);
   }
   return model;
+}
+
+function typeSafe(env: Record<string, string | undefined>): TypeSafeConfig | undefined {
+  const apiKey = env.TYPESAFE_API_KEY?.trim();
+  if (!apiKey) return undefined;
+  return { apiKey, model: env.TYPESAFE_MODEL?.trim() || "jev-1.13.0" };
 }
 
 function keyedProviders(env: Record<string, string | undefined>): Map<ProtocolId, LiveProviderConfig> {
@@ -111,5 +126,8 @@ export function readConfig(env: Record<string, string | undefined> = Bun.env): S
     sessionBudgetRequests: positiveInteger("SESSION_BUDGET_REQUESTS", env.SESSION_BUDGET_REQUESTS, 30),
     sessionBudgetWindowMs: positiveInteger("SESSION_BUDGET_WINDOW_MS", env.SESSION_BUDGET_WINDOW_MS, 3_600_000),
     lifetimeStreamsPerOrigin: positiveInteger("LIFETIME_STREAMS_PER_ORIGIN", env.LIFETIME_STREAMS_PER_ORIGIN, 4),
+    typesafe: typeSafe(env),
+    interpretRateLimitRequests: positiveInteger("INTERPRET_RATE_LIMIT_REQUESTS", env.INTERPRET_RATE_LIMIT_REQUESTS, 120),
+    interpretRateLimitWindowMs: positiveInteger("INTERPRET_RATE_LIMIT_WINDOW_MS", env.INTERPRET_RATE_LIMIT_WINDOW_MS, 60_000),
   };
 }

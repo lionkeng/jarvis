@@ -6,6 +6,7 @@ An embeddable, framework-neutral voice visualization driven by the agent audio t
 
 - `@jarvis-viz/core`: `VoiceViz`, audio features, state machine, canvas presets, streaming Pretext panel, and in-memory transcript store.
 - `@jarvis-viz/react`: React lifecycle adapter and accessible, virtualized transcript view.
+- `@jarvis-viz/surface`: voice surface types, capability registry, request compiler, answer decoder, and runner.
 - `@jarvis-viz/wc`: Shadow DOM custom-element adapter.
 - `@jarvis-viz/demo`: responsive simulation and live-session lab.
 - `@jarvis-viz/server`: Bun BFF that issues GPT Live-1 sessions and Gemini 3.8 Live tokens.
@@ -40,7 +41,7 @@ pnpm dev:all
 
 Open `http://localhost:5180/`. The demo offers three sources: **Simulation**, **OpenAI**, and **Gemini**. Simulation needs no credentials. Both live sources use the same Bun session endpoint as the visualization lab.
 
-Spoken UI requests become one `perform_ui_actions` call. `VoiceViz` emits a `toolcall` event. A demo-only XState actor validates the call, runs a registered capability, and returns one result through `submitToolResult`. Ordinary questions stay in conversation and do not change the page.
+Spoken UI requests become one `request_ui_changes` call that carries one to five plain sentences. `VoiceViz` emits a `toolcall` event. The voice runner waits for the page registry to settle, then compiles each sentence against the controls on screen. It posts that compiled request to `POST /interpret` on the BFF, decodes one typed command, and runs the command through the registry. It then returns one result through `submitToolResult`. A BFF with no TypeSafe key answers 503. The runner reports `interpret_failed`, the model speaks a short failure, and the session stays open. Ordinary questions stay in conversation and do not change the page.
 
 The OpenAI voice model defaults to `gpt-live-1`. Its UI actions run through Responses delegation with `gpt-5.6-luna`. Gemini has no delegation protocol and no backend model. Gemini reasoning comes from the Live model id, either `gemini-3.8-live` or `gemini-3.8-live-extended-thinking`. Voice timing and speed are prompt preferences, so exact timing and playback speed are not guaranteed.
 
@@ -56,7 +57,18 @@ The browser also keeps a lifetime stream open with `GET /session` before creatin
 
 The integration follows the [GPT-Live guide](https://developers.openai.com/api/docs/guides/live), [WebRTC setup](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live), and [delegation contract](https://developers.openai.com/api/docs/guides/live-delegation).
 
-Supported commands are navigation, library selection, the details drawer, named-region scrolling, dashboard search focus, article bookmark activation, and theme selection. The model cannot choose CSS selectors, pointer coordinates, JavaScript, or URLs. XState is a demo dependency. It is not part of `@jarvis-viz/core`.
+The demo registers eight controls: page navigation, library card selection, the details drawer, two scroll regions, dashboard search focus, the article bookmark, and theme selection. The model sends sentences. It never chooses CSS selectors, pointer coordinates, JavaScript, or URLs. The registry, the compiler, the decoder, and the runner live in `@jarvis-viz/surface`. None of them is part of `@jarvis-viz/core`.
+
+## Offline eval
+
+`pnpm eval:interpret --dry-run` scores the labelled corpus in `scripts/fixtures/interpret-corpus.json` without a key or a network call. It builds each answer from the label, so it proves the harness and the corpus rather than the model. Build first, because it imports the built surface package.
+
+```bash
+pnpm build
+pnpm eval:interpret --dry-run
+```
+
+With `TYPESAFE_API_KEY` set, `pnpm eval:interpret` calls TypeSafe for every corpus entry. It prints accuracy per command kind, confidence against correctness, request latency, and input tokens per request. Use those tables to set the three confidence bars before a live run.
 
 ## Session broker contract
 
@@ -228,6 +240,12 @@ Optional, with defaults:
 - `SESSION_BUDGET_WINDOW_MS`, default `3600000`
 - `MAX_OUTPUT_TOKENS`, default `768`, range 16 to 4096
 - `LIFETIME_STREAMS_PER_ORIGIN`, default `4`
+- `TYPESAFE_API_KEY`, no default
+- `TYPESAFE_MODEL`, default `jev-1.13.0`
+- `INTERPRET_RATE_LIMIT_REQUESTS`, default `120`
+- `INTERPRET_RATE_LIMIT_WINDOW_MS`, default `60000`
+
+`TYPESAFE_API_KEY` is the only key for `POST /interpret`. Without it that route answers 503 and the rest of the server boots as before. The BFF counts the interpret rate window per normalized origin, separately from the session rate window.
 
 `MAX_OUTPUT_TOKENS` caps delegated Responses output on OpenAI. It does not cap spoken audio, and Gemini does not use it.
 

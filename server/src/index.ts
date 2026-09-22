@@ -1,8 +1,10 @@
 import { readConfig } from "./config.js";
+import { createInterpretRoute } from "./routes/interpret.js";
 import { createSessionRoute } from "./routes/session.js";
 
 export function createServer(config = readConfig()) {
   const sessionRoute = createSessionRoute({ config });
+  const interpretRoute = createInterpretRoute({ config });
   return Bun.serve({
     port: config.port,
     idleTimeout: 30,
@@ -10,6 +12,7 @@ export function createServer(config = readConfig()) {
       const url = new URL(request.url);
       if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, runtime: "bun" });
       if (url.pathname === "/session") return sessionRoute(request);
+      if (url.pathname === "/interpret") return interpretRoute(request);
       return Response.json({ error: "Not found" }, { status: 404 });
     },
   });

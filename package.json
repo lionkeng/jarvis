@@ -12,6 +12,7 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:architecture": "node scripts/check-architecture-doc.mjs",
     "check:packages": "node scripts/check-packages.mjs",
+    "eval:interpret": "bun run scripts/eval-interpret.ts",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "build": "pnpm -r --if-present build",

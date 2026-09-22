@@ -51,6 +51,34 @@ describe("readConfig", () => {
     expect(() => readConfig({ OPENAI_API_KEY: "key", LIFETIME_STREAMS_PER_ORIGIN: "0" })).toThrow("LIFETIME_STREAMS_PER_ORIGIN");
   });
 
+  test("boots with no TypeSafe key and leaves interpretation unconfigured", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key" }).typesafe).toBeUndefined();
+    expect(readConfig({ OPENAI_API_KEY: "key", TYPESAFE_API_KEY: "   " }).typesafe).toBeUndefined();
+  });
+
+  test("trims the TypeSafe key and pins the default model", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key", TYPESAFE_API_KEY: " ts-secret " }).typesafe).toEqual({ apiKey: "ts-secret", model: "jev-1.13.0" });
+  });
+
+  test("reads a custom TypeSafe model", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key", TYPESAFE_API_KEY: "ts", TYPESAFE_MODEL: " jev-latest " }).typesafe).toEqual({ apiKey: "ts", model: "jev-latest" });
+    expect(readConfig({ OPENAI_API_KEY: "key", TYPESAFE_API_KEY: "ts", TYPESAFE_MODEL: "  " }).typesafe).toEqual({ apiKey: "ts", model: "jev-1.13.0" });
+  });
+
+  test("defaults and reads the interpret rate window", () => {
+    const config = readConfig({ OPENAI_API_KEY: "key" });
+    expect(config.interpretRateLimitRequests).toBe(120);
+    expect(config.interpretRateLimitWindowMs).toBe(60_000);
+    const custom = readConfig({ OPENAI_API_KEY: "key", INTERPRET_RATE_LIMIT_REQUESTS: "30", INTERPRET_RATE_LIMIT_WINDOW_MS: "15000" });
+    expect(custom.interpretRateLimitRequests).toBe(30);
+    expect(custom.interpretRateLimitWindowMs).toBe(15_000);
+  });
+
+  test("rejects an invalid interpret rate window", () => {
+    expect(() => readConfig({ OPENAI_API_KEY: "key", INTERPRET_RATE_LIMIT_REQUESTS: "0" })).toThrow("INTERPRET_RATE_LIMIT_REQUESTS");
+    expect(() => readConfig({ OPENAI_API_KEY: "key", INTERPRET_RATE_LIMIT_WINDOW_MS: "half a minute" })).toThrow("INTERPRET_RATE_LIMIT_WINDOW_MS");
+  });
+
   test("reads Live model and backend settings independently", () => {
     expect(readConfig({ OPENAI_API_KEY: "key" }).providers[0]).toMatchObject({ model: "gpt-live-1", backendModel: "gpt-5.6-luna" });
     expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_LIVE_MODEL: "gpt-live-custom" }).providers[0]).toMatchObject({ model: "gpt-live-custom" });
