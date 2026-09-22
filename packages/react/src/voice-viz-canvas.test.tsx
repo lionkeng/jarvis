@@ -16,6 +16,7 @@ class FakeTransport implements RealtimeTransport {
 
 describe("VoiceVizCanvas", () => {
   beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
     vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
@@ -51,5 +52,18 @@ describe("VoiceVizCanvas", () => {
     expect(transport.disconnect).not.toHaveBeenCalled();
     act(() => root.unmount());
     expect(transport.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("cancels pending setup when autoConnect is turned off", async () => {
+    const transport = new FakeTransport();
+    transport.connect = vi.fn(() => new Promise<void>(() => {}));
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    await act(async () => root.render(<VoiceVizCanvas options={{ transport }} tokenEndpoint="/session" autoConnect />));
+    expect(transport.connect).toHaveBeenCalledOnce();
+    expect(transport.connected).toBe(false);
+    await act(async () => root.render(<VoiceVizCanvas options={{ transport }} tokenEndpoint="/session" autoConnect={false} />));
+    expect(transport.disconnect).toHaveBeenCalledOnce();
+    act(() => root.unmount());
   });
 });

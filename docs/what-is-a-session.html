@@ -72,7 +72,7 @@
       <div>
         <p class="eyebrow">Jarvis Voice Visualization explanation</p>
         <h1>What is a session</h1>
-        <p class="lede">In Jarvis the word "session" names three different lifetimes. People mix up the short mint HTTP call, the live WebRTC peer connection, and the UI turn state that resets on every answer. Those are not the same thing.</p>
+        <p class="lede">Jarvis creates GPT Live-1 sessions through its Bun server. WebRTC carries the running conversation, while the browser tracks captions, playback, backend actions, and final usage.</p>
       </div>
       <aside class="mast-facts card" aria-label="Related reading">
         <span>Companion to</span><strong><a href="architecture.html">architecture.html</a></strong>
@@ -86,118 +86,38 @@
         <p>On this page</p>
         <a href="#three-meanings">Three meanings</a>
         <a href="#data-flow">Data flow</a>
-        <a href="#secret">How the secret is used</a>
+        <a href="#secret">Where credentials stay</a>
         <a href="#call-ends">When the call ends</a>
         <a href="#budget">Session budget</a>
       </nav>
 
       <main>
-        <section id="three-meanings" aria-labelledby="three-title">
-          <p class="label">Overloaded word</p>
-          <h2 id="three-title">Three meanings of "session"</h2>
-          <p class="section-intro">When someone says "the session ended", ask which lifetime they mean. Jarvis uses the same English word for a mint request, a live Realtime call, and a voice UI turn.</p>
-          <div class="grid three" style="margin-top:22px">
-            <article class="card">
-              <p class="number">01 · MINT</p>
-              <h3>HTTP mint request</h3>
-              <p><code>POST /session</code> asks the Bun BFF for an ephemeral OpenAI Realtime client secret (<code>ek_*</code>). That "session" ends when the HTTP response returns. The route lives in <code class="path" data-source="server/src/routes/session.ts">server/src/routes/session.ts</code>. The provider mint lives in <code class="path" data-source="server/src/providers/openai-session.ts">server/src/providers/openai-session.ts</code>.</p>
-            </article>
-            <article class="card">
-              <p class="number">02 · LIVE CALL</p>
-              <h3>WebRTC Realtime call</h3>
-              <p>After the secret arrives, the browser opens a peer connection to OpenAI. Microphone audio, remote agent audio, and the <code>oai-events</code> data channel share that one connection. Many speak, think, and answer turns can run on it. Transport code lives in <code class="path" data-source="packages/core/src/transport/openai.ts">packages/core/src/transport/openai.ts</code>.</p>
-            </article>
-            <article class="card">
-              <p class="number">03 · UI STATE</p>
-              <h3>Voice UI state machine</h3>
-              <p>Core tracks <code>idle</code>, <code>listening</code>, <code>thinking</code>, <code>speaking</code>, <code>interrupted</code>, and <code>error</code> in <code class="path" data-source="packages/core/src/state/state-machine.ts">packages/core/src/state/state-machine.ts</code>. A <code>response.done</code> event returns the machine to <code>idle</code> so the next turn can start. That return to idle is not a teardown of the WebRTC call.</p>
-            </article>
-          </div>
-          <div class="state-flow" aria-label="UI turn cycle inside one live call">
-            <span class="state">idle</span><span class="arrow">→ listen →</span>
-            <span class="state">listening</span><span class="arrow">→ stop →</span>
-            <span class="state">thinking</span><span class="arrow">→ audio →</span>
-            <span class="state">speaking</span><span class="arrow">→ response.done →</span>
-            <span class="state">idle</span>
-          </div>
-          <p class="companion">One live call can walk that loop many times. The peer connection stays up while the UI state keeps returning to idle.</p>
+        <section id="three-meanings">
+          <p class="label">GPT Live-1</p><h2>Creation, conversation, and display state</h2>
+          <p>The browser captures a microphone track, creates the oai-events data channel, and gathers an SDP offer. POST /session sends that offer and pacing preferences to the Bun BFF. The BFF uses its server-only OPENAI_API_KEY to create the GPT-Live session.</p>
+          <p>The HTTP response is the session ID and SDP answer. The browser applies the answer and waits for session.started. The running conversation carries microphone audio, assistant audio, captions, and delegated backend events over WebRTC. Display state can change many times within one session.</p>
         </section>
-
-        <section id="data-flow" aria-labelledby="flow-title">
-          <p class="label">SessionSequence timing</p>
-          <h2 id="flow-title">Data crosses the BFF once, then stays peer to peer.</h2>
-          <p class="section-intro">Cyan arrows are application hops you own. Amber dashed arrows are provider or network work whose timing varies. After step 4, the Bun BFF is off the path.</p>
-          <div class="diagram" role="group" aria-labelledby="flow-diagram-title flow-diagram-desc">
-            <svg viewBox="0 0 1120 560" role="img" aria-labelledby="flow-diagram-title flow-diagram-desc">
-              <title id="flow-diagram-title">Session data-flow timing diagram</title>
-              <desc id="flow-diagram-desc">The browser posts preferences to the Bun BFF. The BFF mints an ephemeral client secret from OpenAI with the long-lived API key and returns that secret. The browser posts an SDP offer to OpenAI with the secret as Bearer. After the SDP answer, mic audio, remote audio, and oai-events travel browser to OpenAI over WebRTC while the BFF stays off the live path. response.done returns UI state to idle without ending the call. disconnect tears the peer down.</desc>
-              <defs>
-                <marker id="flowArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#5be5d0"/></marker>
-                <marker id="flowVariable" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5bd6b"/></marker>
-              </defs>
-              <g font-family="ui-monospace, monospace" font-size="13" fill="#e7f4f0"><text x="130" y="30">browser</text><text x="460" y="30">Bun BFF</text><text x="780" y="30">OpenAI Realtime</text></g>
-              <g stroke="#41615c" stroke-width="1" stroke-dasharray="4 6"><path d="M170 48V530"/><path d="M500 48V530"/><path d="M820 48V530"/></g>
-              <g font-family="ui-monospace, monospace" font-size="11"><text x="16" y="84" fill="#9eb9b5">1</text><text x="16" y="132" fill="#9eb9b5">2</text><text x="16" y="180" fill="#9eb9b5">3</text><text x="16" y="228" fill="#9eb9b5">4</text><text x="16" y="276" fill="#9eb9b5">5</text><text x="16" y="324" fill="#9eb9b5">6</text><text x="16" y="388" fill="#9eb9b5">7</text><text x="16" y="448" fill="#9eb9b5">8</text><text x="16" y="508" fill="#9eb9b5">9</text></g>
-              <path d="M170 78H500" stroke="#5be5d0" stroke-width="2" marker-end="url(#flowArrow)"/><text x="248" y="70" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">POST /session preferences</text>
-              <path d="M500 126H820" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="552" y="118" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">client_secrets + OPENAI_API_KEY</text>
-              <path d="M820 174H500" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="574" y="166" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">ephemeral client secret (ek_*)</text>
-              <path d="M500 222H170" stroke="#5be5d0" stroke-width="2" marker-end="url(#flowArrow)"/><text x="268" y="214" font-family="ui-monospace, monospace" font-size="11" fill="#5be5d0">JSON value (+ expires_at)</text>
-              <path d="M170 270H820" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="336" y="262" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">POST /v1/realtime/calls SDP offer + Bearer ek_*</text>
-              <path d="M820 318H170" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="390" y="310" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">SDP answer, then WebRTC ready</text>
-              <g fill="#19322e" stroke="#5be5d0"><rect x="209" y="348" width="570" height="52" rx="4"/></g>
-              <text x="226" y="372" font-family="ui-sans-serif, system-ui" font-size="13" fill="#e7f4f0">live path: mic, remote audio, oai-events</text>
-              <text x="226" y="390" font-family="ui-monospace, monospace" font-size="11" fill="#9eb9b5">BFF off path · secret unused · many turns</text>
-              <path d="M820 442H170" stroke="#f5bd6b" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#flowVariable)"/><text x="360" y="434" font-family="ui-monospace, monospace" font-size="11" fill="#f5bd6b">response.done → UI idle (call still open)</text>
-              <g fill="#1d2927" stroke="#63827d"><rect x="209" y="470" width="570" height="44" rx="4"/></g>
-              <text x="226" y="497" font-family="ui-monospace, monospace" font-size="11" fill="#e7f4f0">call ends only on disconnect or peer closed / disconnected / failed</text>
-            </svg>
-          </div>
-          <p class="diagram-note">Steps 1 through 4 mint the secret. Steps 5 and 6 open the WebRTC call. Step 7 is the live duplex path. Step 8 is a turn ending, not hangup. Step 9 is teardown. The architecture note adds the renderer clock and the 20,000 ms local connect timeout.</p>
-          <ul class="legend" aria-label="Diagram legend"><li><i></i>Local application hop</li><li><i class="variable"></i>Provider or network hop with variable timing</li></ul>
+        <section id="data-flow">
+          <p class="label">Connection sequence</p><h2>SDP goes through the BFF; media goes directly to OpenAI.</h2>
+          <ol><li>Open GET /session as a lifetime stream and wait for its first frame.</li><li>Capture the microphone and create the data channel.</li><li>Set the local SDP and wait for ICE gathering, up to 10 seconds.</li><li>POST JSON containing sdp and preferences to /session.</li><li>The BFF posts JSON containing session configuration and transport: { type: "webrtc", sdp } to /v1/live/sessions.</li><li>Read session.id and transport.sdp from the answer. Wait up to 20 seconds for session.started after setting the remote description.</li><li>Exchange audio on media tracks and JSON events on the data channel.</li></ol>
+          <p>The BFF has no role in microphone streaming or tool execution after session creation. It keeps the API key, model selection, backend tool schema, and backend output-token limit on the server.</p>
         </section>
-
-        <section id="secret" aria-labelledby="secret-title">
-          <p class="label">Ephemeral client secret</p>
-          <h2 id="secret-title">How the secret is used</h2>
-          <p class="section-intro">The BFF holds <code>OPENAI_API_KEY</code>. The browser never sees that key. It sees only a short-lived client secret, and it uses that secret once. The timing diagram above is the same handoff drawn as a sequence.</p>
-          <div class="sequence" aria-label="Secret handoff sequence">
-            <article>
-              <time>01 · mint</time>
-              <div><strong>The BFF mints with the long-lived key.</strong><br><code class="path" data-source="server/src/providers/openai-session.ts">openai-session.ts</code> posts to <code>https://api.openai.com/v1/realtime/client_secrets</code> with <code>Authorization: Bearer</code> set to <code>OPENAI_API_KEY</code>. The response includes a <code>value</code> field (an <code>ek_*</code> token) and may include <code>expires_at</code>.</div>
-            </article>
-            <article>
-              <time>02 · connect</time>
-              <div><strong>The browser spends the secret once.</strong><br><code class="path" data-source="packages/core/src/transport/openai.ts">OpenAIRealtimeTransport</code> posts an SDP offer to <code>https://api.openai.com/v1/realtime/calls</code> with <code>Authorization: Bearer</code> set to that <code>value</code>. That is the only browser use of the ephemeral secret.</div>
-            </article>
-            <article>
-              <time>03 · live path</time>
-              <div><strong>After the handshake, the secret is unused.</strong><br>Mic audio, remote audio, and <code>oai-events</code> travel browser to OpenAI over WebRTC. The BFF is off the live path. It does not relay turns, tool calls, or transcript text.</div>
-            </article>
-          </div>
-          <p class="warning" style="margin-top:20px"><strong>Connect-time gate only.</strong> <code>parseEphemeralSession</code> rejects an already-expired <code>expires_at</code> when it parses the mint response. That check does not close a call that is already connected.</p>
+        <section id="secret">
+          <p class="label">Credentials</p><h2>The API key stays on the server.</h2>
+          <p>GPT-Live does not use the old Realtime client-secret flow. The browser receives an opaque session ID and an SDP answer. It does not send a bearer token to OpenAI or call realtime/calls.</p>
+          <p>Existing tokenEndpoint and token-endpoint host options retain their names for compatibility. Their value is now the URL of the Live SDP broker.</p>
         </section>
-
-        <section id="call-ends" aria-labelledby="call-title">
-          <p class="label">Live call lifetime</p>
-          <h2 id="call-title">When the live call ends</h2>
-          <p class="section-intro">The live Realtime call ends when the peer connection tears down. It does not end when a single answer finishes.</p>
-          <div class="grid two" style="margin-top:22px">
-            <article class="card">
-              <h3>What ends the call</h3>
-              <p>An explicit <code>disconnect()</code> in <code class="path" data-source="packages/core/src/transport/openai.ts">OpenAIRealtimeTransport</code> closes the data channel, closes the peer connection, and stops local tracks. After the call has connected, a peer connection that becomes <code>closed</code>, <code>disconnected</code>, or <code>failed</code> also tears down and emits <code>disconnected</code>.</p>
-            </article>
-            <article class="card">
-              <h3>What does not end the call</h3>
-              <p><code>response.done</code> only returns the UI state machine to <code>idle</code>. <code>expires_at</code> is a connect-time gate after parse. Neither event closes an established WebRTC call by itself.</p>
-            </article>
-          </div>
+        <section id="call-ends">
+          <p class="label">Lifetime</p><h2>Close the session before releasing its media.</h2>
+          <p>await viz.disconnect() stops the microphone tracks, sends session.close, and waits for session.closed. That final event supplies cumulative voice usage in seconds. Only then does the transport close the data channel and peer connection. A 15 second timeout releases those resources and reports unconfirmed final usage. A provider error or a failed backend response does not end the session; the transport reports it and keeps the call open.</p>
+          <p>The browser holds a lifetime stream to the Bun server. Server shutdown ends the stream and immediately closes browser media and WebRTC after attempting session.close. A stalled stream times out after 15 seconds without a heartbeat. This forced shutdown reports unconfirmed final usage and never reconnects automatically.</p>
+          <p>unmount() starts that cleanup without waiting. Disconnect first if the host needs the final usage event. A backend response completing or a caption arriving does not end the voice session.</p>
         </section>
-
-        <section id="budget" aria-labelledby="budget-title">
-          <p class="label">BFF limits</p>
-          <h2 id="budget-title">Session budget caps minting, not call length</h2>
-          <p class="section-intro"><code class="path" data-source="server/src/routes/session.ts">session.ts</code> applies a per-origin session budget before it asks OpenAI for a client secret. That budget limits how often an origin may mint. It does not limit how long a live WebRTC call may stay open once the secret is spent.</p>
-          <p class="companion">For the full boundary map, renderer timing, and module ownership, read <a href="architecture.html">Jarvis architecture</a>.</p>
+        <section id="budget">
+          <p class="label">Limits and delegation</p><h2>The session budget limits creation requests.</h2>
+          <p>The BFF applies per-origin rate and session budgets, and it caps concurrent lifetime streams per origin. Those counters do not limit conversation duration. MAX_OUTPUT_TOKENS limits delegated Responses output, not spoken audio. Voice usage is cumulative; do not sum usage snapshots.</p>
+          <p>GPT Live-1 handles speech. A separately configured Responses model reasons and chooses the bounded perform_ui_actions tool. The browser validates and executes those actions. Speech can overlap backend work and does not cancel it. Captions retain independent user and assistant fragments and timestamps.</p>
+          <p>See <a href="architecture.html">Jarvis architecture</a> for module ownership and simulation behavior.</p>
         </section>
       </main>
     </div>

@@ -2,17 +2,59 @@ import { describe, expect, test } from "bun:test";
 import { readConfig } from "./config.js";
 
 describe("readConfig", () => {
-  test("requires the server-only API key and normalizes exact origins", () => {
+  test("requires at least one provider key and normalizes exact origins", () => {
     expect(() => readConfig({})).toThrow("OPENAI_API_KEY");
     const config = readConfig({ OPENAI_API_KEY: " secret ", ALLOWED_ORIGINS: "https://voice.example/, http://localhost:5180" });
-    expect(config.apiKey).toBe("secret");
-    expect(config.model).toBe("gpt-realtime-2.1-mini");
+    expect(config.providers).toEqual([{ protocol: "openai-live", apiKey: "secret", model: "gpt-live-1", backendModel: "gpt-5.6-luna", maxOutputTokens: 768 }]);
     expect(config.allowedOrigins).toEqual(["https://voice.example", "http://localhost:5180"]);
+  });
+
+  test("boots on a Gemini key alone with the default Live model", () => {
+    const config = readConfig({ GEMINI_API_KEY: " gem " });
+    expect(config.providers).toEqual([{ protocol: "gemini-live", apiKey: "gem", model: "gemini-3.8-live" }]);
+  });
+
+  test("reads the extended Gemini model and rejects any other", () => {
+    expect(readConfig({ GEMINI_API_KEY: "gem", GEMINI_LIVE_MODEL: "gemini-3.8-live-extended-thinking" }).providers[0]).toMatchObject({ model: "gemini-3.8-live-extended-thinking" });
+    expect(() => readConfig({ GEMINI_API_KEY: "gem", GEMINI_LIVE_MODEL: "gemini-2.0-flash-live" })).toThrow("GEMINI_LIVE_MODEL");
+  });
+
+  test("rejects a Gemini backend model because Gemini has no delegation protocol", () => {
+    expect(() => readConfig({ GEMINI_API_KEY: "gem", GEMINI_LIVE_BACKEND_MODEL: "gemini-3.8-pro" })).toThrow("delegation protocol");
+  });
+
+  test("holds both keyed providers with OpenAI first and follows LIVE_PROVIDERS order", () => {
+    expect(readConfig({ OPENAI_API_KEY: "k", GEMINI_API_KEY: "gem" }).providers.map((provider) => provider.protocol)).toEqual(["openai-live", "gemini-live"]);
+    expect(readConfig({ OPENAI_API_KEY: "k", GEMINI_API_KEY: "gem", LIVE_PROVIDERS: "gemini-live, openai-live" }).providers.map((provider) => provider.protocol)).toEqual(["gemini-live", "openai-live"]);
+    expect(readConfig({ OPENAI_API_KEY: "k", GEMINI_API_KEY: "gem", LIVE_PROVIDERS: "gemini-live" }).providers.map((provider) => provider.protocol)).toEqual(["gemini-live"]);
+  });
+
+  test("rejects a LIVE_PROVIDERS entry with no key and an unknown protocol", () => {
+    expect(() => readConfig({ OPENAI_API_KEY: "k", LIVE_PROVIDERS: "gemini-live" })).toThrow("gemini-live");
+    expect(() => readConfig({ OPENAI_API_KEY: "k", LIVE_PROVIDERS: "anthropic-live" })).toThrow("anthropic-live");
+  });
+
+  test("rejects a LIVE_PROVIDERS entry listed more than once", () => {
+    expect(() => readConfig({ GEMINI_API_KEY: "gem", LIVE_PROVIDERS: "gemini-live,gemini-live" })).toThrow("LIVE_PROVIDERS lists gemini-live more than once");
+    expect(() => readConfig({ OPENAI_API_KEY: "k", GEMINI_API_KEY: "gem", LIVE_PROVIDERS: "openai-live, gemini-live , openai-live" })).toThrow("LIVE_PROVIDERS lists openai-live more than once");
   });
 
   test("rejects invalid startup limits and origin protocols", () => {
     expect(() => readConfig({ OPENAI_API_KEY: "key", PORT: "99999" })).toThrow("PORT");
     expect(() => readConfig({ OPENAI_API_KEY: "key", MAX_OUTPUT_TOKENS: "4097" })).toThrow("MAX_OUTPUT_TOKENS");
     expect(() => readConfig({ OPENAI_API_KEY: "key", ALLOWED_ORIGINS: "javascript:alert(1)" })).toThrow("protocol");
+  });
+
+  test("defaults and reads the concurrent lifetime stream cap", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key" }).lifetimeStreamsPerOrigin).toBe(4);
+    expect(readConfig({ OPENAI_API_KEY: "key", LIFETIME_STREAMS_PER_ORIGIN: "12" }).lifetimeStreamsPerOrigin).toBe(12);
+    expect(() => readConfig({ OPENAI_API_KEY: "key", LIFETIME_STREAMS_PER_ORIGIN: "0" })).toThrow("LIFETIME_STREAMS_PER_ORIGIN");
+  });
+
+  test("reads Live model and backend settings independently", () => {
+    expect(readConfig({ OPENAI_API_KEY: "key" }).providers[0]).toMatchObject({ model: "gpt-live-1", backendModel: "gpt-5.6-luna" });
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_LIVE_MODEL: "gpt-live-custom" }).providers[0]).toMatchObject({ model: "gpt-live-custom" });
+    expect(readConfig({ OPENAI_API_KEY: "key", OPENAI_LIVE_BACKEND_MODEL: "gpt-5.6-terra" }).providers[0]).toMatchObject({ backendModel: "gpt-5.6-terra" });
+    expect(() => readConfig({ OPENAI_API_KEY: "key", MAX_OUTPUT_TOKENS: "15" })).toThrow("at least 16");
   });
 });

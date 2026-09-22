@@ -59,12 +59,40 @@ export const FAILURE_MESSAGES: Record<InteractionFailureCode, string> = {
 };
 
 export function successResult(applied: UiCommand[]): UiCommandBatchSuccess {
-  const count = applied.length;
   return {
     ok: true,
-    message: count === 1 ? "Applied 1 action." : `Applied ${count} actions.`,
+    message: spokenSuccess(applied),
     applied,
   };
+}
+
+export function toWireAction(command: UiCommand): Record<string, unknown> {
+  switch (command.type) {
+    case "navigate":
+      return { type: "navigate", target: command.route };
+    case "open":
+    case "close":
+      return { type: command.type, target: command.target };
+    case "select":
+      return { type: "select", target: command.target, value: command.value };
+    case "scroll":
+      return { type: "scroll", target: command.target, direction: command.direction };
+    case "focus":
+      return { type: "focus", target: command.target };
+    case "activate":
+      return { type: "activate", target: command.target };
+    default: {
+      const _exhaustive: never = command;
+      return _exhaustive;
+    }
+  }
+}
+
+export function serializeBatchResult(result: UiCommandBatchResult): string {
+  return JSON.stringify({
+    ...result,
+    applied: result.applied.map(toWireAction),
+  });
 }
 
 export function failureResult(
@@ -192,6 +220,54 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function hasExactKeys(value: Record<string, unknown>, required: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === required.length && required.every((key) => keys.includes(key));
+}
+
+function spokenSuccess(applied: UiCommand[]): string {
+  const parts = applied.map(spokenCommand);
+  if (parts.length === 0) return "Done.";
+  const first = parts[0];
+  const second = parts[1];
+  if (parts.length === 1 && first !== undefined) return first;
+  if (parts.length === 2 && first !== undefined && second !== undefined) {
+    return `${first.slice(0, -1)} and ${second[0]?.toLowerCase() ?? ""}${second.slice(1)}`;
+  }
+  return "Done.";
+}
+
+function spokenCommand(command: UiCommand): string {
+  switch (command.type) {
+    case "navigate":
+      return `Opened the ${command.route}.`;
+    case "open":
+      return "Opened library details.";
+    case "close":
+      return "Closed library details.";
+    case "select":
+      return command.target === "library.item" ? `Selected ${command.value}.` : `Set ${command.value} theme.`;
+    case "scroll":
+      switch (command.direction) {
+        case "down":
+          return "Scrolled down.";
+        case "up":
+          return "Scrolled up.";
+        case "top":
+          return "Scrolled to the top.";
+        case "bottom":
+          return "Scrolled to the bottom.";
+        default: {
+          const _exhaustive: never = command.direction;
+          return _exhaustive;
+        }
+      }
+    case "focus":
+      return "Focused search.";
+    case "activate":
+      return "Toggled the bookmark.";
+    default: {
+      const _exhaustive: never = command;
+      return _exhaustive;
+    }
+  }
 }
 
 function isRouteId(value: unknown): value is RouteId {

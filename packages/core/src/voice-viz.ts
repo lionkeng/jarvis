@@ -15,8 +15,10 @@ import { AudioTextSynchronizer } from "./text/audio-text-sync.js";
 import { StreamingTextPanel } from "./text/streaming-panel.js";
 import { TranscriptStore } from "./transcript/store.js";
 import type { TranscriptSnapshot } from "./transcript/types.js";
-import { OpenAIRealtimeTransport } from "./transport/openai.js";
+import { LiveTransport } from "./transport/live-transport.js";
 import type { NormalizedRealtimeEvent, RealtimeSessionPreferences, RealtimeToolCall, RealtimeToolResult, RealtimeTransport } from "./transport/types.js";
+
+const AUDIBLE_LEVEL = 0.035;
 
 export interface VoiceVizOptions {
   presets?: readonly PresetName[];
@@ -34,6 +36,11 @@ export interface VoiceVizEventMap {
   transcriptchange: TranscriptSnapshot;
   toolcall: RealtimeToolCall;
   error: { error: Error };
+  backendusage: { delegationId: string; responseId: string; inputTokens: number; outputTokens: number; totalTokens: number };
+  backendfailed: { delegationId: string; responseId: string; status: "failed" | "incomplete" | "cancelled" };
+  providererror: { message: string; code: string | undefined; clientEventId: string | undefined };
+  usage: { seconds: number; final: boolean; reason: string | undefined };
+  disconnected: Record<string, never>;
 }
 
 export type VoiceVizEventName = keyof VoiceVizEventMap;
@@ -64,6 +71,10 @@ export class VoiceViz {
   #audio: HTMLAudioElement | undefined;
   #reducedMotion: boolean;
   #unmounted = false;
+  #continuousAudio = false;
+  #lastVoicedAt = -Infinity;
+  /** The analyser level trails agent audio the user cut off, so that tail must not re-derive speaking. */
+  #bargeInTail = false;
 
   constructor(options?: VoiceVizOptions);
   /** @deprecated Pass options to the constructor and call mount(container). */
@@ -85,7 +96,7 @@ export class VoiceViz {
     const textLayout = options.locale ? new PretextLayout(undefined, { locale: options.locale }) : new PretextLayout();
     this.#panel = new StreamingTextPanel(textLayout);
     this.#audioText = new AudioTextSynchronizer((delta, now) => this.#appendAgentText(delta, now));
-    this.#transport = options.transport ?? new OpenAIRealtimeTransport();
+    this.#transport = options.transport ?? new LiveTransport();
     this.#featureSource = options.featureSource;
     this.#regions = computeRegions(1, 1, { placement: this.#placement, breakpoint: this.#breakpoint });
     this.#unsubscribeTransport = this.#transport.subscribe((event) => this.#handleTransport(event));
@@ -117,7 +128,18 @@ export class VoiceViz {
       const size = renderer.size;
       this.#regions = computeRegions(size.width, size.height, { placement: this.#placement, breakpoint: this.#breakpoint });
       const features = this.#analyser?.sample(now) ?? this.#featureSource?.sample(now) ?? this.#idleFeatureSource.sample(now);
-      const sync = this.#audioText.tick(now, features.voiced || features.level >= 0.035);
+      const audible = features.voiced || features.level >= AUDIBLE_LEVEL;
+      if (this.#continuousAudio && this.connected) {
+        if (this.#bargeInTail) {
+          if (!audible) this.#bargeInTail = false;
+        } else if (audible) {
+          this.#lastVoicedAt = now;
+          this.#dispatch({ type: "agent-audio-started" });
+        } else if (now - this.#lastVoicedAt >= 350 && this.state === "speaking") {
+          this.#dispatch({ type: "agent-audio-stopped" });
+        }
+      }
+      const sync = this.#audioText.tick(now, audible);
       if (sync.audioStarted) this.#dispatch({ type: "agent-audio-started" });
       if (sync.completed) this.#completeAgentResponse(now);
       const frameTheme = themeForFrame(this.#theme, this.#state.snapshot.state, now);
@@ -156,11 +178,8 @@ export class VoiceViz {
     await this.#transport.connect(tokenEndpoint, preferences);
   }
 
-  disconnect(): void {
-    this.#transport.disconnect();
-    this.#audioText.interrupt();
-    this.#detachAudio();
-    this.#dispatch({ type: "disconnect" });
+  async disconnect(): Promise<void> {
+    await this.#transport.disconnect();
   }
 
   setTheme(theme: ThemeInput): void {
@@ -221,16 +240,40 @@ export class VoiceViz {
   #handleTransport(event: NormalizedRealtimeEvent): void {
     const now = performance.now();
     switch (event.type) {
+      case "backend-usage":
+        this.#emit("backendusage", { delegationId: event.delegationId, responseId: event.responseId, inputTokens: event.inputTokens, outputTokens: event.outputTokens, totalTokens: event.totalTokens });
+        break;
+      case "backend-failed":
+        this.#emit("backendfailed", { delegationId: event.delegationId, responseId: event.responseId, status: event.status });
+        break;
+      case "provider-error":
+        this.#emit("providererror", { message: event.message, code: event.code, clientEventId: event.clientEventId });
+        break;
+      case "session-usage":
+        this.#emit("usage", { seconds: event.seconds, final: event.final, reason: event.reason });
+        break;
+      case "live-caption": {
+        const message = this.transcript.appendTimedDelta(event.role, { delta: event.delta, startMs: event.startMs, endMs: event.endMs }, now);
+        if (event.role === "agent") this.#panel.upsert(message, now);
+        break;
+      }
       case "connected":
+        this.transcript.beginTimedSession();
         this.#dispatch({ type: "connected" });
         break;
-      case "disconnected":
+      case "disconnected": {
+        const live = this.#continuousAudio;
+        this.#detachAudio();
+        this.transcript.complete("user", "complete", now);
         this.#audioText.interrupt();
         this.#panel.finish(now);
-        this.transcript.complete("agent", "interrupted", now);
-        this.#dispatch({ type: "disconnect" });
+        this.transcript.complete("agent", live ? "complete" : "interrupted", now);
+        if (this.state !== "error") this.#dispatch({ type: "disconnect" });
+        this.#emit("disconnected", {});
         break;
+      }
       case "user-speech-started":
+        if (this.#continuousAudio) this.#bargeInTail = true;
         if (this.#audioText.interrupt() || this.#state.snapshot.state === "speaking") {
           this.#panel.finish(now);
           this.transcript.complete("agent", "interrupted", now);
@@ -267,6 +310,7 @@ export class VoiceViz {
         break;
       case "agent-track":
         this.#attachAudio(event.stream);
+        this.#continuousAudio = event.continuous ?? false;
         break;
       case "tool-call":
         this.#emit("toolcall", event.call);
@@ -328,6 +372,9 @@ export class VoiceViz {
   }
 
   #detachAudio(): void {
+    this.#continuousAudio = false;
+    this.#lastVoicedAt = -Infinity;
+    this.#bargeInTail = false;
     void this.#analyser?.dispose();
     this.#analyser = undefined;
     if (this.#audio) {

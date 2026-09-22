@@ -1,4 +1,4 @@
-import { themes, VoiceViz, type PanelPlacement, type PresetName, type ThemeName } from "@jarvis-viz/core";
+import { themes, VoiceViz, type PanelPlacement, type PresetName, type RealtimeTransport, type ThemeName } from "@jarvis-viz/core";
 import { voiceVizElementStyles } from "./styles.js";
 
 export class VoiceVizElement extends HTMLElement {
@@ -6,6 +6,7 @@ export class VoiceVizElement extends HTMLElement {
   readonly #root: ShadowRoot;
   readonly #mount: HTMLDivElement;
   #instance: VoiceViz | undefined;
+  #transport: RealtimeTransport | undefined;
 
   constructor() {
     super();
@@ -15,6 +16,7 @@ export class VoiceVizElement extends HTMLElement {
     this.#mount = document.createElement("div");
     this.#mount.className = "mount";
     this.#root.append(style, this.#mount);
+    this.#upgradeTransport();
   }
 
   connectedCallback(): void {
@@ -22,7 +24,7 @@ export class VoiceVizElement extends HTMLElement {
       this.#instance = new VoiceViz(this.#options());
       this.#instance.mount(this.#mount);
     }
-    if (this.hasAttribute("auto-connect") && this.tokenEndpoint) void this.connect();
+    this.#autoConnect();
   }
 
   disconnectedCallback(): void {
@@ -55,13 +57,43 @@ export class VoiceVizElement extends HTMLElement {
     return value === "bottom" || value === "side" ? value : "auto";
   }
 
+  get transport(): RealtimeTransport | undefined {
+    return this.#transport;
+  }
+
+  set transport(value: RealtimeTransport | undefined) {
+    if (value === this.#transport) return;
+    if (this.#instance?.connected) throw new Error("jarvis-voice-viz cannot swap transport during a live session: call disconnect() first");
+    this.#transport = value;
+    if (!this.#instance) return;
+    this.#instance.unmount();
+    this.#instance = new VoiceViz(this.#options());
+    this.#instance.mount(this.#mount);
+    this.#autoConnect();
+  }
+
   async connect(): Promise<void> {
     if (!this.#instance) this.connectedCallback();
     await this.#instance?.connect(this.tokenEndpoint);
   }
 
-  disconnect(): void {
-    this.#instance?.disconnect();
+  async disconnect(): Promise<void> {
+    await this.#instance?.disconnect();
+  }
+
+  #autoConnect(): void {
+    if (!this.isConnected || !this.hasAttribute("auto-connect") || !this.tokenEndpoint) return;
+    // A swap or a removal cancels this connect. A real failure still shows as the visualization's failed state.
+    void this.#instance?.connect(this.tokenEndpoint).catch(() => undefined);
+  }
+
+  // An own `transport` assigned before the element upgrades shadows this accessor, so re-assign it through the setter.
+  #upgradeTransport(): void {
+    if (!Object.prototype.hasOwnProperty.call(this, "transport")) return;
+    const own = this as { transport?: RealtimeTransport };
+    const value = own.transport;
+    delete own.transport;
+    this.transport = value;
   }
 
   #presets(): PresetName[] {
@@ -71,7 +103,7 @@ export class VoiceVizElement extends HTMLElement {
   }
 
   #options() {
-    return { presets: this.#presets(), theme: this.theme, panelPlacement: this.panelPlacement };
+    return { presets: this.#presets(), theme: this.theme, panelPlacement: this.panelPlacement, ...(this.#transport ? { transport: this.#transport } : {}) };
   }
 }
 

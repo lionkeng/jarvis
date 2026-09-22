@@ -59,16 +59,14 @@ export function VoiceVizCanvas({ options, tokenEndpoint, autoConnect = false, cl
   useEffect(() => {
     const instance = instanceRef.current;
     if (!instance) return;
-    if (!autoConnect || !tokenEndpoint) {
-      if (instance.connected) instance.disconnect();
-      return;
-    }
+    if (!autoConnect || !tokenEndpoint) return;
     let active = true;
     void instance.connect(tokenEndpoint).catch((error: unknown) => {
       if (active) errorRef.current?.(error instanceof Error ? error : new Error(String(error)));
     });
     return () => {
       active = false;
+      void instance.disconnect();
     };
   }, [autoConnect, featureSource, locale, panelBreakpoint, reducedMotion, tokenEndpoint, transport]);
 

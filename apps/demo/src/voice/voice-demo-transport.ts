@@ -1,9 +1,11 @@
 import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeToolResult, RealtimeTransport } from "@jarvis-viz/core";
 import { DemoVoiceFeatureSource } from "../demo-transport.js";
+import { FAILURE_MESSAGES } from "./interaction-contract.js";
 
 export type VoiceDemoScriptId =
   | "navigate"
   | "navigate-scroll"
+  | "navigate-scroll-bottom"
   | "select"
   | "open-details"
   | "close-details"
@@ -27,7 +29,18 @@ const SCRIPTS: Record<VoiceDemoScriptId, VoiceDemoScript> = {
   },
   "navigate-scroll": {
     id: "navigate-scroll",
-    user: "Open the article and scroll to the bottom.",
+    user: "Open article and scroll",
+    agent: "Opening the article and scrolling down.",
+    argumentsJson: JSON.stringify({
+      actions: [
+        { type: "navigate", target: "article" },
+        { type: "scroll", target: "article.content", direction: "down" },
+      ],
+    }),
+  },
+  "navigate-scroll-bottom": {
+    id: "navigate-scroll-bottom",
+    user: "Open the article and scroll to the bottom",
     agent: "Opened the article and scrolled to the bottom.",
     argumentsJson: JSON.stringify({
       actions: [
@@ -96,6 +109,7 @@ const SCRIPTS: Record<VoiceDemoScriptId, VoiceDemoScript> = {
 export const VOICE_DEMO_SCRIPTS: ReadonlyArray<{ id: VoiceDemoScriptId; label: string }> = [
   { id: "navigate", label: "Open the library" },
   { id: "navigate-scroll", label: "Open article and scroll" },
+  { id: "navigate-scroll-bottom", label: "Scroll article to the bottom" },
   { id: "select", label: "Select Atlas" },
   { id: "open-details", label: "Open library details" },
   { id: "close-details", label: "Close library details" },
@@ -109,7 +123,6 @@ export class VoiceDemoTransport implements RealtimeTransport {
   #timers = new Set<number>();
   #connected = false;
   #run = 0;
-  #seq = 0;
   #pendingCallId: string | undefined;
   readonly #toolResults: RealtimeToolResult[] = [];
 
@@ -147,8 +160,9 @@ export class VoiceDemoTransport implements RealtimeTransport {
     this.#toolResults.push(result);
     if (!this.#connected || this.#pendingCallId !== result.callId) return;
     this.#pendingCallId = undefined;
-    if (result.continueResponse === false) return;
-    this.#stream(acknowledgement(result.output));
+    const spoken = spokenFollowUp(result);
+    if (spoken === undefined) return;
+    this.#stream(spoken);
   }
 
   playScript(id: VoiceDemoScriptId): void {
@@ -163,8 +177,7 @@ export class VoiceDemoTransport implements RealtimeTransport {
         this.#later(80, () => this.#stream(script.agent));
         return;
       }
-      this.#seq += 1;
-      const callId = `call_${script.id}_${this.#seq}`;
+      const callId = `call_${script.id}_${crypto.randomUUID()}`;
       this.#pendingCallId = callId;
       this.#emit({
         type: "tool-call",
@@ -199,14 +212,19 @@ export class VoiceDemoTransport implements RealtimeTransport {
   }
 }
 
-function acknowledgement(output: string): string {
+function spokenFollowUp(result: RealtimeToolResult): string | undefined {
+  const output = parseOutput(result.output);
+  const message = typeof output?.message === "string" ? output.message : undefined;
+  if (output?.ok === true) return message ?? "Done.";
+  if (output?.code === "cancelled") return undefined;
+  return message ?? FAILURE_MESSAGES.execution_failed;
+}
+
+function parseOutput(output: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(output);
-    if (parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") {
-      return parsed.message;
-    }
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
   } catch {
-    return "Done.";
+    return undefined;
   }
-  return "Done.";
 }

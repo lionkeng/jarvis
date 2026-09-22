@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitFor } from "xstate";
+import type { RealtimeToolResult } from "@jarvis-viz/core";
 import { UiCapabilityRegistry } from "./capability-registry.js";
 import { INTERACTION_QUEUE_LIMIT } from "./interaction-contract.js";
 import { createInteractionActor } from "./interaction-machine.js";
@@ -19,7 +20,7 @@ function toolCall(callId: string, commands: unknown[]) {
 
 function createHarness() {
   const registry = new UiCapabilityRegistry();
-  const submitted: Array<{ callId: string; output: string; continueResponse?: boolean }> = [];
+  const submitted: RealtimeToolResult[] = [];
   const executed: UiCommand[] = [];
   registry.register("navigation", {
     supportedActions: ["navigate"],
@@ -47,7 +48,11 @@ describe("interaction machine", () => {
     actor.send({ type: "TOOL_CALL_RECEIVED", call: toolCall("call_ok", [{ type: "navigate", target: "library" }]) });
     await waitFor(actor, (state) => state.matches("ready") && submitted.length === 1);
     expect(executed).toEqual([{ type: "navigate", route: "library" }]);
-    expect(JSON.parse(submitted[0]!.output)).toMatchObject({ ok: true, applied: [{ type: "navigate", route: "library" }] });
+    expect(JSON.parse(submitted[0]!.output)).toMatchObject({
+      ok: true,
+      message: "Opened the library.",
+      applied: [{ type: "navigate", target: "library" }],
+    });
     actor.send({ type: "TOOL_CALL_RECEIVED", call: toolCall("call_ok", [{ type: "navigate", target: "library" }]) });
     await Promise.resolve();
     expect(submitted).toHaveLength(1);
@@ -78,7 +83,12 @@ describe("interaction machine", () => {
     });
     await waitFor(actor, (state) => state.matches("ready") && submitted.length === 1);
     expect(executed).toEqual([{ type: "navigate", route: "library" }]);
-    expect(JSON.parse(submitted[0]!.output)).toMatchObject({ ok: false, code: "execution_failed", actionIndex: 1 });
+    expect(JSON.parse(submitted[0]!.output)).toMatchObject({
+      ok: false,
+      code: "execution_failed",
+      actionIndex: 1,
+      applied: [{ type: "navigate", target: "library" }],
+    });
     actor.stop();
   });
 
@@ -97,7 +107,7 @@ describe("interaction machine", () => {
 
   it("rejects overflow voice requests with queue_full and leaves pointer requests unqueued", async () => {
     const registry = new UiCapabilityRegistry();
-    const submitted: Array<{ callId: string; output: string }> = [];
+    const submitted: RealtimeToolResult[] = [];
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     registry.register("navigation", {
@@ -125,9 +135,9 @@ describe("interaction machine", () => {
     actor.stop();
   });
 
-  it("cancels execution without a spoken follow-up", async () => {
+  it("cancels execution and reports a cancelled result", async () => {
     const registry = new UiCapabilityRegistry();
-    const submitted: Array<{ callId: string; continueResponse?: boolean; output: string }> = [];
+    const submitted: RealtimeToolResult[] = [];
     registry.register("navigation", {
       supportedActions: ["navigate"],
       execute: async (_command, signal) => new Promise((_, reject) => {
@@ -143,8 +153,24 @@ describe("interaction machine", () => {
     await waitFor(actor, (state) => state.matches("executing"));
     actor.send({ type: "VOICE_INTERRUPTED" });
     await waitFor(actor, (state) => state.matches("ready") && submitted.length === 1);
-    expect(submitted[0]?.continueResponse).toBe(false);
     expect(JSON.parse(submitted[0]!.output)).toMatchObject({ code: "cancelled" });
+    actor.stop();
+  });
+
+  it("reports target_unavailable when a capability never appears", async () => {
+    const registry = new UiCapabilityRegistry();
+    const submitted: RealtimeToolResult[] = [];
+    const actor = createInteractionActor({
+      registry,
+      resultPort: { submit: (result) => submitted.push(result) },
+    });
+    actor.start();
+    actor.send({
+      type: "TOOL_CALL_RECEIVED",
+      call: toolCall("call_missing", [{ type: "scroll", target: "article.content", direction: "down" }]),
+    });
+    await waitFor(actor, (state) => state.matches("ready") && submitted.length === 1, { timeout: 3_000 });
+    expect(JSON.parse(submitted[0]!.output)).toMatchObject({ ok: false, code: "target_unavailable" });
     actor.stop();
   });
 

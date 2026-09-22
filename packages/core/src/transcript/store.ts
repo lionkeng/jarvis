@@ -1,4 +1,4 @@
-import type { TranscriptListener, TranscriptMessage, TranscriptRole, TranscriptSnapshot, TranscriptStatus } from "./types.js";
+import type { TranscriptFragment, TranscriptListener, TranscriptMessage, TranscriptRole, TranscriptSnapshot, TranscriptStatus } from "./types.js";
 
 export class TranscriptStore {
   #messages: TranscriptMessage[] = [];
@@ -6,6 +6,7 @@ export class TranscriptStore {
   #snapshot: TranscriptSnapshot = { messages: this.#messages, revision: 0 };
   #listeners = new Set<TranscriptListener>();
   #nextId = 1;
+  #timedSessionStartIndex = 0;
 
   getSnapshot = (): TranscriptSnapshot => this.#snapshot;
 
@@ -31,6 +32,39 @@ export class TranscriptStore {
       status: "streaming",
     };
     this.#messages = [...this.#messages, message];
+    this.#publish();
+    return message;
+  }
+
+  beginTimedSession(): void {
+    this.complete("user");
+    this.complete("agent");
+    this.#timedSessionStartIndex = this.#messages.length;
+  }
+
+  appendTimedDelta(role: TranscriptRole, fragment: TranscriptFragment, now = performance.now()): TranscriptMessage {
+    let index = -1;
+    for (let i = this.#messages.length - 1; i >= this.#timedSessionStartIndex; i -= 1) {
+      const message = this.#messages[i];
+      if (message?.role === role && message.fragments?.some((part) => fragment.startMs <= part.endMs + 1_000 && fragment.endMs >= part.startMs - 1_000)) { index = i; break; }
+    }
+    const current = this.#messages[index];
+    const fragments = [...(current?.fragments ?? []), fragment].sort((a, b) => a.startMs - b.startMs);
+    const message: TranscriptMessage = {
+      id: current?.id ?? `message-${this.#nextId++}`,
+      role, text: fragments.map((part) => part.delta).join(""), fragments,
+      startedAt: current?.startedAt ?? now, updatedAt: now, status: current?.status ?? "streaming",
+    };
+    const messages = [...this.#messages];
+    if (index >= 0) messages[index] = message;
+    else {
+      for (let i = 0; i < messages.length; i += 1) {
+        const previous = messages[i];
+        if (previous?.role === role && previous.status === "streaming") messages[i] = { ...previous, status: "complete" };
+      }
+      messages.push(message);
+    }
+    this.#messages = messages;
     this.#publish();
     return message;
   }
@@ -72,6 +106,7 @@ export class TranscriptStore {
   clear(): void {
     if (this.#messages.length === 0) return;
     this.#messages = [];
+    this.#timedSessionStartIndex = 0;
     this.#publish();
   }
 

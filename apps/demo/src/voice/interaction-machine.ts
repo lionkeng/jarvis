@@ -11,6 +11,7 @@ import {
   MIN_ACTIONS_PER_CALL,
   failureResult,
   parseToolCall,
+  serializeBatchResult,
   successResult,
   type InteractionRequest,
   type UiCommand,
@@ -129,32 +130,20 @@ function cancelledResult(context: InteractionContext): UiCommandBatchFailure {
   return failureResult("cancelled", [...context.applied]);
 }
 
-function continueResponseFor(result: UiCommandBatchResult): boolean {
-  return result.ok || result.code !== "cancelled";
-}
-
 function reportVoiceResult(input: ReportInput): void {
   const { request, result, resultPort, submittedCallIds } = input;
   if (!request || request.source !== "voice" || !result) return;
   const callId = request.call.callId;
   if (submittedCallIds.has(callId)) return;
   submittedCallIds.add(callId);
-  resultPort.submit({
-    callId,
-    output: JSON.stringify(result),
-    continueResponse: continueResponseFor(result),
-  });
+  resultPort.submit({ callId, output: serializeBatchResult(result) });
 }
 
 function submitOverflowResult(context: InteractionContext, callId: string): void {
   if (context.submittedCallIds.has(callId)) return;
   const result = failureResult("queue_full", []);
   context.submittedCallIds.add(callId);
-  context.resultPort.submit({
-    callId,
-    output: JSON.stringify(result),
-    continueResponse: true,
-  });
+  context.resultPort.submit({ callId, output: serializeBatchResult(result) });
 }
 
 function isOkValidation(output: unknown): output is { status: "ok"; commands: UiCommand[] } {

@@ -38,11 +38,13 @@ for (const element of document.querySelectorAll("[src], link[href], a[href]")) {
 }
 
 const facts = [
-  "20,000 ms", "18 chars/s", "850 ms", "5,000 ms", "250 ms", "100 ms", "2048", "0.78", "640", "echo", "zh",
+  "20,000 ms", "18 chars/s", "850 ms", "5,000 ms", "250 ms", "100 ms", "2048", "0.78", "640", "marin", "gpt-live-1",
   "idle", "listening", "thinking", "speaking", "interrupted", "error",
   "perform_ui_actions",
   "bars", "waveform", "ring", "particles", "hud",
-  "Network timing is variable", "Provider turn detection and transcription timing are variable",
+  "Network timing is variable", "Provider transcript and audio timing are variable",
+  "OPENAI_LIVE_MODEL", "OPENAI_LIVE_BACKEND_MODEL", "LIFETIME_STREAMS_PER_ORIGIN", "session.started", "session.closed", "parallel_tool_calls",
+  "providererror", "backendfailed",
 ];
 for (const fact of facts) expect(html.includes(fact), `missing required fact: ${fact}`);
 

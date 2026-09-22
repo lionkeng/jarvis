@@ -2,6 +2,7 @@ import type { VoiceFeatures } from "../audio/types.js";
 import type { Rect } from "../layout/types.js";
 import type { AgentState } from "../state/types.js";
 import type { TextMotion } from "../render/theme.js";
+import type { TranscriptMessage } from "../transcript/types.js";
 import { flowAlpha, flowOffset } from "./motion/flow.js";
 import { kineticTransform } from "./motion/kinetic.js";
 import { PretextLayout } from "./pretext-layout.js";
@@ -33,6 +34,7 @@ export interface PanelPaintOptions {
 }
 
 interface Utterance {
+  id?: string;
   text: string;
   startedAt: number;
   chunks: readonly TimedChunk[];
@@ -55,6 +57,7 @@ export class StreamingTextPanel {
   #tail = "";
   #pending = "";
   #currentText = "";
+  #currentId: string | undefined;
   #currentStartedAt = 0;
   #currentChunks: TimedChunk[] = [];
   #activeStart = 0;
@@ -105,6 +108,42 @@ export class StreamingTextPanel {
     if (BOUNDARY.test(this.#pending) || cjkBatchReady) this.#layoutPending(arrivedAt, false);
   }
 
+  upsert(message: TranscriptMessage, arrivedAt = performance.now()): void {
+    const completedIndex = this.#utterances.findIndex((utterance) => utterance.id === message.id);
+    if (completedIndex >= 0) {
+      const current = this.#utterances[completedIndex];
+      if (!current || current.text === message.text) return;
+      this.#utterances[completedIndex] = {
+        ...current,
+        text: message.text,
+        chunks: [{ text: message.text, arrivedAt }],
+      };
+      this.#reflowAll();
+      return;
+    }
+
+    if (this.#currentId !== message.id) {
+      this.finish(arrivedAt);
+      this.#currentId = message.id;
+    }
+
+    if (message.text !== this.#currentText) {
+      if (message.text.startsWith(this.#currentText)) {
+        this.append(message.text.slice(this.#currentText.length), arrivedAt);
+      } else {
+        this.#currentText = message.text;
+        this.#currentStartedAt = arrivedAt;
+        this.#currentChunks = [{ text: message.text, arrivedAt }];
+        this.#activeStart = 0;
+        this.#pending = "";
+        this.#tail = "";
+        this.#reflowAll();
+      }
+    }
+
+    if (message.status !== "streaming") this.finish(arrivedAt);
+  }
+
   finish(arrivedAt = performance.now()): void {
     this.#layoutPending(arrivedAt, true);
     if (this.#tail) {
@@ -120,8 +159,14 @@ export class StreamingTextPanel {
       });
       this.#tail = "";
     }
-    if (this.#currentText) this.#utterances.push({ text: this.#currentText, startedAt: this.#currentStartedAt, chunks: [...this.#currentChunks] });
+    if (this.#currentText) this.#utterances.push({
+      ...(this.#currentId ? { id: this.#currentId } : {}),
+      text: this.#currentText,
+      startedAt: this.#currentStartedAt,
+      chunks: [...this.#currentChunks],
+    });
     this.#currentText = "";
+    this.#currentId = undefined;
     this.#pending = "";
     this.#currentChunks = [];
     this.#currentStartedAt = 0;
@@ -135,6 +180,7 @@ export class StreamingTextPanel {
     this.#tail = "";
     this.#pending = "";
     this.#currentText = "";
+    this.#currentId = undefined;
     this.#currentChunks = [];
     this.#currentStartedAt = 0;
     this.#activeStart = 0;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useActorRef, useSelector } from "@xstate/react";
-import { VoiceViz, type RealtimeToolResult, type ResponseTiming, type TranscriptStore } from "@jarvis-viz/core";
+import { createLiveTransport, VoiceViz, type LiveProtocolId, type RealtimeToolResult, type RealtimeTransport, type ResponseTiming, type TranscriptStore, type VoiceFeatureSource } from "@jarvis-viz/core";
 import { TranscriptView } from "@jarvis-viz/react";
 import { UiCapabilityRegistry } from "./capability-registry.js";
 import { createHashRouter } from "./hash-router.js";
@@ -10,13 +10,25 @@ import { NavigationCapability, RoutePage, sendTyped, type LibraryItem, type Them
 import { VOICE_DEMO_SCRIPTS, VoiceDemoTransport } from "./voice-demo-transport.js";
 import { DemoVoiceFeatureSource } from "../demo-transport.js";
 
-type ConnectionPhase = "disconnected" | "connecting" | "connected";
+type ConnectionPhase = "disconnected" | "connecting" | "connected" | "closing";
+type SourceMode = "simulation" | LiveProtocolId;
 const RESPONSE_TIMINGS: ReadonlyArray<{ value: ResponseTiming; label: string }> = [
   { value: "fast", label: "Fast" },
   { value: "natural", label: "Natural" },
   { value: "patient", label: "Patient" },
 ];
+const LIVE_SOURCES: ReadonlyArray<{ mode: LiveProtocolId; label: string }> = [
+  { mode: "openai-live", label: "OpenAI" },
+  { mode: "gemini-live", label: "Gemini" },
+];
 const ROUTES = ["dashboard", "library", "article", "settings"] as const;
+
+function createSource(mode: SourceMode): { transport: RealtimeTransport; featureSource?: VoiceFeatureSource; demo?: VoiceDemoTransport } {
+  if (mode !== "simulation") return { transport: createLiveTransport({ protocol: mode }) };
+  const featureSource = new DemoVoiceFeatureSource();
+  const demo = new VoiceDemoTransport(featureSource);
+  return { transport: demo, featureSource, demo };
+}
 
 export function VoiceApp() {
   const registry = useRef(new UiCapabilityRegistry()).current;
@@ -41,7 +53,7 @@ export function VoiceApp() {
     queueFull: snapshot.context.queue.length >= INTERACTION_QUEUE_LIMIT,
   }));
 
-  const [mode, setMode] = useState<"simulation" | "live">("simulation");
+  const [mode, setMode] = useState<SourceMode>("simulation");
   const [endpoint, setEndpoint] = useState("http://localhost:3010/session");
   const [responseTiming, setResponseTiming] = useState<ResponseTiming>("natural");
   const [speechRate, setSpeechRate] = useState(1);
@@ -73,11 +85,11 @@ export function VoiceApp() {
     const host = mountRef.current;
     if (!host) return;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const signal = mode === "simulation" ? new DemoVoiceFeatureSource() : undefined;
-    const transport = signal ? new VoiceDemoTransport(signal) : undefined;
-    demoTransportRef.current = transport;
+    const source = createSource(mode);
+    demoTransportRef.current = source.demo;
     const viz = new VoiceViz({
-      ...(transport && signal ? { transport, featureSource: signal } : {}),
+      transport: source.transport,
+      ...(source.featureSource ? { featureSource: source.featureSource } : {}),
       presets: ["ring", "hud"],
       reducedMotion,
     });
@@ -90,9 +102,14 @@ export function VoiceApp() {
     const unsubState = viz.on("statechange", ({ state }) => {
       setStatus(state);
       const snapshot = actor.getSnapshot();
-      if (state === "listening" && (snapshot.matches("validating") || snapshot.matches("executing"))) {
+      if (mode === "simulation" && state === "listening" && (snapshot.matches("validating") || snapshot.matches("executing"))) {
         actor.send({ type: "VOICE_INTERRUPTED" });
       }
+    });
+    const unsubDisconnect = viz.on("disconnected", () => {
+      setConnectionPhase("disconnected");
+      if (viz.state !== "error") setStatus("Disconnected");
+      actor.send({ type: "SESSION_DISCONNECTED" });
     });
     const unsubError = viz.on("error", ({ error }) => {
       connectionAttempt.current += 1;
@@ -101,11 +118,16 @@ export function VoiceApp() {
       setLiveMessage(error.message);
       actor.send({ type: "SESSION_DISCONNECTED" });
     });
-    if (transport) void viz.connect("demo");
+    const unsubBackendFailed = viz.on("backendfailed", ({ status }) => { setStatus(`Backend response ${status}`); });
+    const unsubProviderError = viz.on("providererror", ({ message }) => { setStatus(message); });
+    if (source.demo) void viz.connect("demo");
     return () => {
       unsubTool();
       unsubState();
       unsubError();
+      unsubDisconnect();
+      unsubBackendFailed();
+      unsubProviderError();
       viz.unmount();
       vizRef.current = undefined;
       demoTransportRef.current = undefined;
@@ -113,27 +135,25 @@ export function VoiceApp() {
     };
   }, [actor, mode]);
 
-  const selectMode = (nextMode: "simulation" | "live") => {
+  const selectMode = (nextMode: SourceMode) => {
     if (nextMode === mode || activity.voiceBusy) return;
     connectionAttempt.current += 1;
     setConnectionPhase("disconnected");
-    setStatus(nextMode === "live" ? "Ready" : "idle");
+    setStatus(nextMode === "simulation" ? "idle" : "Ready");
     setMode(nextMode);
   };
 
   const toggleLiveConnection = async () => {
     const viz = vizRef.current;
-    if (!viz || connectionPhase === "connecting" || activity.voiceBusy) return;
+    if (!viz || (connectionPhase === "connecting" || connectionPhase === "closing") || activity.voiceBusy) return;
     if (connectionPhase === "connected" || viz.connected) {
       connectionAttempt.current += 1;
-      viz.disconnect();
-      setConnectionPhase("disconnected");
-      setStatus("Disconnected");
-      actor.send({ type: "SESSION_DISCONNECTED" });
+      setConnectionPhase("closing");
+      setStatus("Finishing conversation");
+      await viz.disconnect();
       return;
     }
     const attempt = ++connectionAttempt.current;
-    viz.setTranscriptPace(speechRate);
     setConnectionPhase("connecting");
     setStatus("Connecting");
     try {
@@ -174,7 +194,9 @@ export function VoiceApp() {
 
       <div className="toolbar" role="group" aria-label="Source">
         <button type="button" className={mode === "simulation" ? "active" : ""} disabled={activity.voiceBusy} onClick={() => selectMode("simulation")}>Simulation</button>
-        <button type="button" className={mode === "live" ? "active" : ""} disabled={activity.voiceBusy} onClick={() => selectMode("live")}>OpenAI live</button>
+        {LIVE_SOURCES.map((source) => (
+          <button key={source.mode} type="button" className={mode === source.mode ? "active" : ""} disabled={activity.voiceBusy} onClick={() => selectMode(source.mode)}>{source.label}</button>
+        ))}
         <span>{status}</span>
       </div>
 
@@ -207,7 +229,7 @@ export function VoiceApp() {
             </select>
           </label>
           <label>
-            Speech speed
+            Speaking pace
             <input
               type="range"
               min="0.75"
@@ -218,12 +240,11 @@ export function VoiceApp() {
               onInput={(event) => {
                 const next = event.currentTarget.valueAsNumber;
                 setSpeechRate(next);
-                vizRef.current?.setTranscriptPace(next);
               }}
             />
           </label>
-          <button type="button" disabled={connectionPhase === "connecting" || activity.voiceBusy} onClick={() => void toggleLiveConnection()}>
-            {connectionPhase === "connecting" ? "Connecting…" : connectionPhase === "connected" ? "Disconnect" : "Connect"}
+          <button type="button" disabled={(connectionPhase === "connecting" || connectionPhase === "closing") || activity.voiceBusy} onClick={() => void toggleLiveConnection()}>
+            {connectionPhase === "closing" ? "Finishing…" : connectionPhase === "connecting" ? "Connecting…" : connectionPhase === "connected" ? "Disconnect" : "Connect"}
           </button>
         </section>
       )}

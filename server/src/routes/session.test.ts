@@ -1,22 +1,245 @@
 import { describe, expect, test } from "bun:test";
+import { GEMINI_GRANT, GEMINI_POST_BODY, LEGACY_POST_BODY, OPENAI_GRANT, READY_PLAN_PAYLOAD } from "../../../scripts/fixtures/session-wire.js";
 import { createSessionRoute } from "./session.js";
-import type { ServerConfig } from "../config.js";
+import type { LiveProviderConfig, ServerConfig } from "../config.js";
 
+const openAIProvider: LiveProviderConfig = { protocol: "openai-live", apiKey: "test-key", model: "gpt-live-1", backendModel: "gpt-5.6-luna", maxOutputTokens: 512 };
+const geminiProvider: LiveProviderConfig = { protocol: "gemini-live", apiKey: "gemini-key", model: "gemini-3.8-live" };
 const config: ServerConfig = {
-  apiKey: "test-key", model: "gpt-realtime-2.1-mini", allowedOrigins: ["https://voice.example"], port: 3010,
+  providers: [openAIProvider], allowedOrigins: ["https://voice.example"], port: 3010,
   rateLimitRequests: 1, rateLimitWindowMs: 60_000, sessionBudgetRequests: 10, sessionBudgetWindowMs: 3_600_000,
-  maxOutputTokens: 512, contextTokenLimit: 4000,
+  lifetimeStreamsPerOrigin: 4,
 };
-const fetcher = async () => Response.json({ value: "ek_test", expires_at: Math.floor(Date.now() / 1000) + 60 });
+const dualConfig: ServerConfig = { ...config, providers: [openAIProvider, geminiProvider] };
+const geminiPost = (body: unknown = GEMINI_POST_BODY) => new Request("http://localhost/session", {
+  method: "POST",
+  headers: { Origin: "https://voice.example", "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+const lifetimeRequest = (init: RequestInit = {}) => new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" }, ...init });
+const answer = { session: { id: "live_test" }, transport: { type: "webrtc", sdp: "v=0" } };
+// Every spelling here parses to the origin https://voice.example.
+const originSpellings = ["HTTPS://voice.example", "https://VOICE.example", "https://voice.example:443", "https://voice.example/x", "https://user@voice.example"];
+const postFrom = (origin: string) => new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: origin } });
+const streamFrom = (origin: string) => new Request("http://localhost/session", { method: "GET", headers: { Origin: origin } });
+const fetcher = async () => Response.json(answer);
 
 describe("session route", () => {
-  test("mints a no-store token for an allowed origin", async () => {
+  test("streams a ready event for an allowed origin and cleans up when the reader cancels", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    const intervals: Array<number | undefined> = [];
+    const cleared: Array<ReturnType<typeof setInterval> | undefined> = [];
+    const timer = 41 as unknown as ReturnType<typeof setInterval>;
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+      intervals.push(args[1]);
+      return timer;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+      cleared.push(handle);
+    }) as typeof clearInterval;
+    try {
+      const route = createSessionRoute({ config, fetcher });
+      const response = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" } }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-accel-buffering")).toBe("no");
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toBe("event: ready\ndata: {\"protocols\":[\"openai-live\"]}\n\n");
+      expect(intervals).toEqual([5_000]);
+      await reader.cancel();
+      expect(cleared).toEqual([timer]);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("rejects a lifetime stream without an Origin and an untrusted origin without CORS", async () => {
     const route = createSessionRoute({ config, fetcher });
-    const response = await route(new Request("http://localhost/session", { method: "POST", headers: { Origin: "https://voice.example" } }));
+    const missing = await route(new Request("http://localhost/session", { method: "GET" }));
+    expect(missing.status).toBe(403);
+    expect(missing.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await missing.json()).toEqual({ error: "Origin is not allowed" });
+
+    const rejected = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://attacker.example" } }));
+    expect(rejected.status).toBe(403);
+    expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await rejected.json()).toEqual({ error: "Origin is not allowed" });
+  });
+
+  test("streams a lifetime lease for other loopback origins when localhost is configured", async () => {
+    const route = createSessionRoute({ config: { ...config, allowedOrigins: ["http://localhost:5180"] }, fetcher });
+    const response = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "http://127.0.0.1:4321" } }));
     expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:4321");
+    await response.body!.cancel();
+  });
+
+  test("cleans up a lifetime stream when its request aborts", async () => {
+    const originalClearInterval = globalThis.clearInterval;
+    const cleared: Array<ReturnType<typeof setInterval> | undefined> = [];
+    globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+      originalClearInterval(handle);
+      cleared.push(handle);
+    }) as typeof clearInterval;
+    try {
+      const abort = new AbortController();
+      const route = createSessionRoute({ config, fetcher });
+      const response = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" }, signal: abort.signal }));
+      abort.abort();
+      expect(cleared).toHaveLength(1);
+      await response.body!.cancel();
+      expect(cleared).toHaveLength(1);
+    } finally {
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("caps concurrent lifetime streams per origin", async () => {
+    const route = createSessionRoute({ config: { ...config, lifetimeStreamsPerOrigin: 2 }, fetcher });
+    const streams = [await route(lifetimeRequest()), await route(lifetimeRequest())];
+    for (const stream of streams) expect(stream.status).toBe(200);
+    const limited = await route(lifetimeRequest());
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+    expect(limited.headers.get("retry-after")).toBeNull();
+    expect(await limited.json()).toEqual({ error: "Origin lifetime stream limit exceeded" });
+    for (const stream of streams) await stream.body!.cancel();
+  });
+
+  test("frees a lifetime slot when a stream closes", async () => {
+    const route = createSessionRoute({ config: { ...config, lifetimeStreamsPerOrigin: 1 }, fetcher });
+    const first = await route(lifetimeRequest());
+    expect(first.status).toBe(200);
+    expect((await route(lifetimeRequest())).status).toBe(429);
+    await first.body!.cancel();
+    const reopened = await route(lifetimeRequest());
+    expect(reopened.status).toBe(200);
+    await reopened.body!.cancel();
+  });
+
+  test("counts a lifetime stream once when abort and cancel both clean up", async () => {
+    const route = createSessionRoute({ config: { ...config, lifetimeStreamsPerOrigin: 1 }, fetcher });
+    const abort = new AbortController();
+    const first = await route(lifetimeRequest({ signal: abort.signal }));
+    expect(first.status).toBe(200);
+    abort.abort();
+    await first.body!.cancel();
+    const second = await route(lifetimeRequest());
+    expect(second.status).toBe(200);
+    expect((await route(lifetimeRequest())).status).toBe(429);
+    await second.body!.cancel();
+  });
+
+  test("does not charge lifetime streams against the POST rate window or budget", async () => {
+    const route = createSessionRoute({ config, fetcher });
+    const first = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" } }));
+    const second = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" } }));
+    await first.body!.cancel();
+    await second.body!.cancel();
+    const response = await route(new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: "https://voice.example" } }));
+    expect(response.status).toBe(201);
+  });
+
+  test("returns a no-store SDP answer for an allowed origin", async () => {
+    const route = createSessionRoute({ config, fetcher });
+    const response = await route(new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: "https://voice.example" } }));
+    expect(response.status).toBe(201);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("access-control-allow-origin")).toBe("https://voice.example");
-    expect((await response.json() as { value: string }).value).toBe("ek_test");
+    expect(await response.json()).toEqual(answer);
+  });
+
+  test("issues the OpenAI grant for a legacy POST body with no protocol", async () => {
+    const route = createSessionRoute({ config, fetcher: async () => Response.json(OPENAI_GRANT) });
+    const response = await route(new Request("http://localhost/session", {
+      method: "POST",
+      headers: { Origin: "https://voice.example", "Content-Type": "application/json" },
+      body: JSON.stringify(LEGACY_POST_BODY),
+    }));
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual(OPENAI_GRANT);
+  });
+
+  test("advertises every configured protocol on the ready event", async () => {
+    const route = createSessionRoute({ config: dualConfig, fetcher });
+    const response = await route(new Request("http://localhost/session", { method: "GET", headers: { Origin: "https://voice.example" } }));
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    const payload = new TextDecoder().decode(first.value).replace("event: ready\ndata: ", "").trim();
+    expect(JSON.parse(payload)).toEqual(READY_PLAN_PAYLOAD);
+    await reader.cancel();
+  });
+
+  test("issues a Gemini websocket-token grant for a Gemini POST", async () => {
+    const route = createSessionRoute({ config: dualConfig, fetcher: async () => Response.json({ name: "auth_tokens/route" }) });
+    const response = await route(geminiPost());
+    expect(response.status).toBe(201);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const grant = await response.json() as Record<string, unknown>;
+    expect(Object.keys(grant).sort()).toEqual(Object.keys(GEMINI_GRANT).sort());
+    expect(grant.kind).toBe(GEMINI_GRANT.kind);
+    expect(grant.token).toBe("auth_tokens/route");
+  });
+
+  test("mints the Gemini token with the server-held key and never the request body", async () => {
+    let mint: { url: string; headers: Headers; body: string } | undefined;
+    const route = createSessionRoute({
+      config: dualConfig,
+      fetcher: async (url, init) => {
+        mint = { url: String(url), headers: new Headers(init?.headers), body: String(init?.body) };
+        return Response.json({ name: "auth_tokens/route" });
+      },
+    });
+    const response = await route(geminiPost({ ...GEMINI_POST_BODY, model: "untrusted", apiKey: "untrusted" }));
+    expect(response.status).toBe(201);
+    expect(mint?.headers.get("x-goog-api-key")).toBe("gemini-key");
+    expect(mint?.url).toContain("/v1beta/auth_tokens");
+    expect(mint?.body).toContain("models/gemini-3.8-live");
+    expect(mint?.body).not.toContain("untrusted");
+  });
+
+  test("rejects a Gemini POST on an OpenAI-only config before calling any provider", async () => {
+    let called = false;
+    const route = createSessionRoute({ config, fetcher: async () => { called = true; return Response.json(answer); } });
+    const response = await route(geminiPost());
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid SDP offer or session preferences" });
+    expect(called).toBe(false);
+  });
+
+  test("charges the Gemini protocol against the same rate window", async () => {
+    const route = createSessionRoute({ config: dualConfig, fetcher: async () => Response.json({ name: "auth_tokens/route" }) });
+    expect((await route(geminiPost())).status).toBe(201);
+    const limited = await route(geminiPost());
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+  });
+
+  test("charges the Gemini protocol against the same session budget", async () => {
+    const route = createSessionRoute({
+      config: { ...dualConfig, rateLimitRequests: 10, sessionBudgetRequests: 1 },
+      fetcher: async () => Response.json({ name: "auth_tokens/route" }),
+    });
+    expect((await route(geminiPost())).status).toBe(201);
+    const exhausted = await route(geminiPost());
+    expect(exhausted.status).toBe(429);
+    expect(await exhausted.json()).toEqual({ error: "Origin session budget exhausted" });
+  });
+
+  test("creates sessions for other loopback origins when localhost is configured", async () => {
+    const route = createSessionRoute({
+      config: { ...config, allowedOrigins: ["http://localhost:5180"] },
+      fetcher,
+    });
+    const response = await route(new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: "http://[::1]:5180" } }));
+    expect(response.status).toBe(201);
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://[::1]:5180");
   });
 
   test("forwards validated live-session preferences to OpenAI", async () => {
@@ -25,32 +248,30 @@ describe("session route", () => {
       config,
       fetcher: async (_input, init) => {
         providerBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        return Response.json({ value: "ek_preferences", expires_at: Math.floor(Date.now() / 1000) + 60 });
+        return Response.json(answer);
       },
     });
     const response = await route(new Request("http://localhost/session", {
       method: "POST",
       headers: { Origin: "https://voice.example", "Content-Type": "application/json" },
-      body: JSON.stringify({ responseTiming: "patient", speechRate: 0.9 }),
+      body: JSON.stringify({ sdp: "v=0", responseTiming: "patient", speechRate: 0.9, model: "untrusted", backendModel: "untrusted" }),
     }));
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(201);
     expect(providerBody).toMatchObject({
-      session: {
-        reasoning: { effort: "medium" },
-        audio: {
-          input: {
-            transcription: {
-              model: "gpt-realtime-whisper",
-              language: "zh",
-              delay: "high",
-            },
-            turn_detection: { eagerness: "low" },
-          },
-          output: { speed: 0.9 },
-        },
-      },
+      transport: { type: "webrtc", sdp: "v=0" },
+      session: { model: "gpt-live-1", instructions: expect.stringContaining("0.9 times normal"), delegation: { responses: { model: "gpt-5.6-luna" } } },
     });
+  });
+
+  test("rejects missing, blank and oversized offers before calling the provider", async () => {
+    for (const body of [{}, { sdp: " " }, { sdp: 1 }, { sdp: "x".repeat(65_536) }]) {
+      let called = false;
+      const route = createSessionRoute({ config, fetcher: async () => { called = true; return Response.json(answer); } });
+      const response = await route(new Request("http://localhost/session", { method: "POST", headers: { Origin: "https://voice.example" }, body: JSON.stringify(body) }));
+      expect(response.status).toBe(400);
+      expect(called).toBe(false);
+    }
   });
 
   test("rejects malformed or out-of-policy session preferences", async () => {
@@ -59,7 +280,7 @@ describe("session route", () => {
     const response = await route(new Request("http://localhost/session", {
       method: "POST",
       headers: { Origin: "https://voice.example", "Content-Type": "application/json" },
-      body: JSON.stringify({ responseTiming: "instant", speechRate: 2 }),
+      body: JSON.stringify({ sdp: "v=0", responseTiming: "instant", speechRate: 2 }),
     }));
 
     expect(response.status).toBe(400);
@@ -69,30 +290,132 @@ describe("session route", () => {
   test("rejects untrusted origins before calling OpenAI", async () => {
     let called = false;
     const route = createSessionRoute({ config, fetcher: async () => { called = true; return Response.json({ value: "bad" }); } });
-    const response = await route(new Request("http://localhost/session", { method: "POST", headers: { Origin: "https://attacker.example" } }));
+    const response = await route(new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: "https://attacker.example" } }));
     expect(response.status).toBe(403);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://attacker.example");
+    expect(await response.json()).toEqual({ error: "Origin is not allowed" });
     expect(called).toBe(false);
+  });
+
+  test("answers OPTIONS preflight for a disallowed origin so the browser can read the POST error", async () => {
+    const route = createSessionRoute({ config, fetcher });
+    const response = await route(new Request("http://localhost/session", { method: "OPTIONS", headers: { Origin: "https://attacker.example" } }));
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://attacker.example");
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST, OPTIONS");
   });
 
   test("rate limits per origin and ignores spoofable forwarded-address headers", async () => {
     const route = createSessionRoute({ config, fetcher });
-    const request = (forwardedFor: string) => new Request("http://localhost/session", { method: "POST", headers: { Origin: "https://voice.example", "x-forwarded-for": forwardedFor } });
-    expect((await route(request("127.0.0.1"))).status).toBe(200);
+    const request = (forwardedFor: string) => new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: "https://voice.example", "x-forwarded-for": forwardedFor } });
+    expect((await route(request("127.0.0.1"))).status).toBe(201);
     const limited = await route(request("203.0.113.45"));
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("60");
+  });
+
+  test("charges every spelling of one origin against a single rate window", async () => {
+    const route = createSessionRoute({ config, fetcher });
+    expect((await route(postFrom("https://voice.example"))).status).toBe(201);
+    for (const spelling of originSpellings) {
+      const limited = await route(postFrom(spelling));
+      expect(limited.status).toBe(429);
+      expect(limited.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      expect(await limited.json()).toEqual({ error: "Session request rate limit exceeded" });
+    }
+  });
+
+  test("spends the rate window when the first request uses a variant spelling", async () => {
+    for (const spelling of originSpellings) {
+      const route = createSessionRoute({ config, fetcher });
+      const issued = await route(postFrom(spelling));
+      expect(issued.status).toBe(201);
+      expect(issued.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      expect((await route(postFrom("https://voice.example"))).status).toBe(429);
+    }
+  });
+
+  test("charges every spelling of one origin against a single session budget", async () => {
+    const route = createSessionRoute({ config: { ...config, rateLimitRequests: 10, sessionBudgetRequests: 1 }, fetcher });
+    expect((await route(postFrom("https://voice.example"))).status).toBe(201);
+    for (const spelling of originSpellings) {
+      const exhausted = await route(postFrom(spelling));
+      expect(exhausted.status).toBe(429);
+      expect(exhausted.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+      expect(await exhausted.json()).toEqual({ error: "Origin session budget exhausted" });
+    }
+  });
+
+  test("counts every spelling of one origin against a single lifetime-stream cap", async () => {
+    const route = createSessionRoute({ config: { ...config, lifetimeStreamsPerOrigin: 2 }, fetcher });
+    const [firstSpelling, ...otherSpellings] = originSpellings;
+    const canonical = await route(streamFrom("https://voice.example"));
+    const variant = await route(streamFrom(firstSpelling!));
+    expect(canonical.status).toBe(200);
+    expect(variant.status).toBe(200);
+    expect(variant.headers.get("access-control-allow-origin")).toBe("https://voice.example");
+    for (const spelling of otherSpellings) {
+      const limited = await route(streamFrom(spelling));
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({ error: "Origin lifetime stream limit exceeded" });
+    }
+    await variant.body!.cancel();
+    const reopened = await route(streamFrom(otherSpellings[0]!));
+    expect(reopened.status).toBe(200);
+    expect((await route(streamFrom("https://voice.example"))).status).toBe(429);
+    await canonical.body!.cancel();
+    await reopened.body!.cancel();
+  });
+
+  test("keeps separate counters for distinct allowed origins", async () => {
+    const route = createSessionRoute({ config: { ...config, allowedOrigins: ["https://voice.example", "https://other.example"] }, fetcher });
+    expect((await route(postFrom("https://voice.example"))).status).toBe(201);
+    expect((await route(postFrom("https://other.example"))).status).toBe(201);
+    expect((await route(postFrom("https://other.example:443"))).status).toBe(429);
+  });
+
+  test("charges all loopback origins against one shared set of counters", async () => {
+    const loopbackOrigins = ["http://127.0.0.1:4321", "http://[::1]:5180", "https://localhost:9", "http://LOCALHOST:5180"];
+    const loopbackConfig = { ...config, allowedOrigins: ["https://voice.example", "http://localhost:5180"], lifetimeStreamsPerOrigin: 1 };
+
+    const rateLimited = createSessionRoute({ config: loopbackConfig, fetcher });
+    expect((await rateLimited(postFrom("http://localhost:5180"))).status).toBe(201);
+    for (const origin of loopbackOrigins) {
+      const limited = await rateLimited(postFrom(origin));
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({ error: "Session request rate limit exceeded" });
+    }
+    const viaOtherHost = await rateLimited(postFrom("http://127.0.0.1:4321"));
+    expect(viaOtherHost.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:4321");
+    expect((await rateLimited(postFrom("https://voice.example"))).status).toBe(201);
+
+    const budgeted = createSessionRoute({ config: { ...loopbackConfig, rateLimitRequests: 10, sessionBudgetRequests: 1 }, fetcher });
+    expect((await budgeted(postFrom("http://localhost:5180"))).status).toBe(201);
+    for (const origin of loopbackOrigins) {
+      const exhausted = await budgeted(postFrom(origin));
+      expect(exhausted.status).toBe(429);
+      expect(await exhausted.json()).toEqual({ error: "Origin session budget exhausted" });
+    }
+
+    const stream = await rateLimited(streamFrom("http://localhost:5180"));
+    expect(stream.status).toBe(200);
+    for (const origin of loopbackOrigins) expect((await rateLimited(streamFrom(origin))).status).toBe(429);
+    const remoteStream = await rateLimited(streamFrom("https://voice.example"));
+    expect(remoteStream.status).toBe(200);
+    await stream.body!.cancel();
+    await remoteStream.body!.cancel();
   });
 
   test("rejects malformed methods", async () => {
     const route = createSessionRoute({ config, fetcher });
     const response = await route(new Request("http://localhost/session", { method: "PUT", headers: { Origin: "https://voice.example" } }));
     expect(response.status).toBe(405);
-    expect(response.headers.get("allow")).toContain("POST");
+    expect(response.headers.get("allow")).toBe("GET, POST, OPTIONS");
   });
 
   test("returns a generic gateway error when the provider fails", async () => {
     const route = createSessionRoute({ config, fetcher: async () => new Response("provider secret", { status: 500 }) });
-    const response = await route(new Request("http://localhost/session", { method: "POST", headers: { Origin: "https://voice.example" } }));
+    const response = await route(new Request("http://localhost/session", { method: "POST", body: JSON.stringify({ sdp: "v=0" }), headers: { Origin: "https://voice.example" } }));
     expect(response.status).toBe(502);
     expect(await response.text()).not.toContain("provider secret");
   });
