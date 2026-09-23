@@ -5,18 +5,21 @@ The original repository was a single Vite playback experiment under root `src/`.
 ## Dependency direction
 
 ```text
-apps/demo (voice SPA + XState) ---+
+apps/demo (voice SPA) ------------+
 packages/react -------------------+--> packages/core --> @chenglou/pretext
 packages/wc ----------------------+
+
+apps/demo ------------------------> packages/surface (depends on nothing)
 
 browser --GET /session (lease, protocol list)--> server (Bun)
 browser --POST /session--> server (Bun) --> OpenAI live/sessions
 browser --POST /session--> server (Bun) --> Google auth_tokens
+browser --POST /interpret--> server (Bun) --> TypeSafe System One
 browser --WebRTC (audio + tool calls) --> OpenAI GPT-Live
 browser --WebSocket (PCM audio + tool calls) --> Gemini 3.8 Live
 ```
 
-`packages/core` has no React, XState, or server dependency. Renderer code consumes normalized state, features, regions, and theme contracts. Raw OpenAI and Gemini Live event names are isolated to `packages/core/src/transport/`. The Bun server contains no browser code. It never receives conversation audio, transcript content, or live tool calls after it exchanges the SDP offer or mints the Gemini token. The voice-first demo owns the interaction actor and capability registry.
+`packages/core` has no React or server dependency. Renderer code consumes normalized state, features, regions, and theme contracts. Raw OpenAI and Gemini Live event names are isolated to `packages/core/src/transport/`. The Bun server contains no browser code. After the handshake it receives only the request sentences the voice model sends to `/interpret`, and never audio, captions, or tool results. The voice-first demo owns the runner and the capability registry through `packages/surface`.
 
 One broker handshake serves both protocols. `GET /session` returns the lease, and its `ready` event lists the protocol ids the BFF has keys for. `POST /session` takes a flat body with an optional `protocol`. The OpenAI grant stays `{ session, transport }`. The Gemini grant is `{ kind: "websocket-token", endpoint, token, setup, expiresAt }`.
 
@@ -24,7 +27,7 @@ One broker handshake serves both protocols. `GET /session` returns the lease, an
 
 - pnpm installs and links every workspace package and owns `pnpm-lock.yaml`.
 - Vite runs and builds the demo.
-- TypeScript emits the three publishable packages.
+- TypeScript emits the four publishable packages.
 - Bun runs, tests, and bundles the BFF.
 - Canvas 2D remains the production renderer. The hot loop does not require Three.js or WebGPU.
 
@@ -34,7 +37,9 @@ The BFF validates exact origins, applies a short rate window and a longer per-or
 
 Each Gemini connection gets one single-use ephemeral token. It expires after 30 minutes and has 1 minute to start a session. Google locks every setup field the token's field mask names. The browser cannot change the model, the tools, the system instruction, the voice, or transcription. A setup field outside the mask is not locked. `sessionResumption` stays outside the mask, so the browser sends its resumption handle in a new connection. The browser opens the WebSocket to Google itself, so conversation audio, transcripts, and tool calls never enter the Bun process. The expiry timer follows the newest grant, so a reconnect extends the session.
 
-The session advertises an exact `perform_ui_actions` grammar. The browser parser still treats tool arguments as untrusted. A tool result is the call ID and the output JSON. Live collects function calls from nested Responses output items, returns every required result, and then continues backend work. Voice prompts request brief success acknowledgements and silent cancellation. Live speech continues independently of backend work. Provider errors and failed backend responses are reported as `provider-error` and `backend-failed` events and never close the session. Only `session.closed`, peer loss, or lifetime-stream loss end it. Gemini emits no `session-usage`, `backend-usage`, or `backend-failed` event, and Google discards its pending function calls when it reports an interruption.
+`POST /interpret` is the one live path back through the BFF. It takes a compiled `{ state, questions }` body from an allowed origin. It applies its own sliding window from `INTERPRET_RATE_LIMIT_REQUESTS` per `INTERPRET_RATE_LIMIT_WINDOW_MS`, caps the body at 32 KiB and 64 questions, and rejects any question that is not `choice`, `noul`, or `score`. It adds the key and the model pinned by `TYPESAFE_MODEL` server-side. It forwards once with a 5 second timeout and returns the answers unchanged. A 429 or 529 upstream passes through as 429 with `Retry-After`, and any other upstream failure is a 502. `TYPESAFE_API_KEY` is optional and exists only in the Bun process. Without it the route answers 503 and the rest of the server boots as before.
+
+The session advertises one static `request_ui_changes` tool that takes one to five request sentences. The browser still treats tool arguments as untrusted, and the registry rechecks every decoded command against the controls on screen before it runs. A tool result is the call ID and the output JSON. Live collects function calls from nested Responses output items, returns every required result, and then continues backend work. Voice prompts request brief success acknowledgements and silent cancellation. Live speech continues independently of backend work. Provider errors and failed backend responses are reported as `provider-error` and `backend-failed` events and never close the session. Only `session.closed`, peer loss, or lifetime-stream loss end it. Gemini emits no `session-usage`, `backend-usage`, or `backend-failed` event, and Google discards its pending function calls when it reports an interruption.
 
 Each channel owns its close discipline. OpenAI startup waits for `session.started`. Its shutdown stops the microphone at once, sends `session.close`, then waits up to 15 seconds for `session.closed` before releasing the peer connection. Gemini shutdown stops capture and closes the socket with code 1000, with a 2 second fallback and no wait for a provider message. Lease loss aborts either channel at once.
 

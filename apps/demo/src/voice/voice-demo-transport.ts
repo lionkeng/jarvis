@@ -1,6 +1,6 @@
 import type { NormalizedRealtimeEvent, RealtimeEventListener, RealtimeToolResult, RealtimeTransport } from "@jarvis-viz/core";
+import { REQUEST_UI_CHANGES_TOOL } from "@jarvis-viz/surface";
 import { DemoVoiceFeatureSource } from "../demo-transport.js";
-import { FAILURE_MESSAGES } from "./interaction-contract.js";
 
 export type VoiceDemoScriptId =
   | "navigate"
@@ -20,89 +20,63 @@ interface VoiceDemoScript {
   argumentsJson?: string;
 }
 
+function requests(...sentences: string[]): string {
+  return JSON.stringify({ requests: sentences });
+}
+
 const SCRIPTS: Record<VoiceDemoScriptId, VoiceDemoScript> = {
   navigate: {
     id: "navigate",
     user: "Open the library.",
     agent: "Opening the library.",
-    argumentsJson: JSON.stringify({ actions: [{ type: "navigate", target: "library" }] }),
+    argumentsJson: requests("go to the library page"),
   },
   "navigate-scroll": {
     id: "navigate-scroll",
     user: "Open article and scroll",
     agent: "Opening the article and scrolling down.",
-    argumentsJson: JSON.stringify({
-      actions: [
-        { type: "navigate", target: "article" },
-        { type: "scroll", target: "article.content", direction: "down" },
-      ],
-    }),
+    argumentsJson: requests("go to the article page", "scroll the article down"),
   },
   "navigate-scroll-bottom": {
     id: "navigate-scroll-bottom",
     user: "Open the article and scroll to the bottom",
     agent: "Opened the article and scrolled to the bottom.",
-    argumentsJson: JSON.stringify({
-      actions: [
-        { type: "navigate", target: "article" },
-        { type: "scroll", target: "article.content", direction: "bottom" },
-      ],
-    }),
+    argumentsJson: requests("go to the article page", "scroll the article to the bottom"),
   },
   select: {
     id: "select",
     user: "Open the library and select Atlas.",
     agent: "Selected Atlas.",
-    argumentsJson: JSON.stringify({
-      actions: [
-        { type: "navigate", target: "library" },
-        { type: "select", target: "library.item", value: "atlas" },
-      ],
-    }),
+    argumentsJson: requests("go to the library page", "select the Atlas card"),
   },
   "open-details": {
     id: "open-details",
     user: "Open the library details.",
     agent: "Opened the details panel.",
-    argumentsJson: JSON.stringify({
-      actions: [
-        { type: "navigate", target: "library" },
-        { type: "open", target: "library.details" },
-      ],
-    }),
+    argumentsJson: requests("go to the library page", "open the library details panel"),
   },
   "close-details": {
     id: "close-details",
     user: "Close the library details.",
     agent: "Closed the details panel.",
-    argumentsJson: JSON.stringify({ actions: [{ type: "close", target: "library.details" }] }),
+    argumentsJson: requests("close the library details panel"),
   },
   focus: {
     id: "focus",
     user: "Focus the dashboard search field.",
     agent: "Search is focused.",
-    argumentsJson: JSON.stringify({
-      actions: [
-        { type: "navigate", target: "dashboard" },
-        { type: "focus", target: "dashboard.search" },
-      ],
-    }),
+    argumentsJson: requests("go to the dashboard page", "put the cursor in the search box"),
   },
   activate: {
     id: "activate",
     user: "Bookmark the article.",
-    agent: "Toggled the article bookmark.",
-    argumentsJson: JSON.stringify({
-      actions: [
-        { type: "navigate", target: "article" },
-        { type: "activate", target: "article.bookmark" },
-      ],
-    }),
+    agent: "Bookmarked the article.",
+    argumentsJson: requests("go to the article page", "bookmark this article"),
   },
   question: {
     id: "question",
     user: "What does this demo visualize?",
-    agent: "It visualizes the remote agent audio while this page keeps UI commands on a separate actor.",
+    agent: "It visualizes the remote agent audio while this page runs spoken requests through its own runner.",
   },
 };
 
@@ -181,7 +155,7 @@ export class VoiceDemoTransport implements RealtimeTransport {
       this.#pendingCallId = callId;
       this.#emit({
         type: "tool-call",
-        call: { callId, name: "perform_ui_actions", argumentsJson: script.argumentsJson },
+        call: { callId, name: REQUEST_UI_CHANGES_TOOL, argumentsJson: script.argumentsJson },
       });
     });
   }
@@ -214,17 +188,22 @@ export class VoiceDemoTransport implements RealtimeTransport {
 
 function spokenFollowUp(result: RealtimeToolResult): string | undefined {
   const output = parseOutput(result.output);
-  const message = typeof output?.message === "string" ? output.message : undefined;
-  if (output?.ok === true) return message ?? "Done.";
-  if (output?.code === "cancelled") return undefined;
-  return message ?? FAILURE_MESSAGES.execution_failed;
+  if (!output) return undefined;
+  const results = Array.isArray(output.results) ? output.results : [];
+  const cancelled = results.some((entry) => isPlainObject(entry) && entry.status === "cancelled");
+  if (cancelled) return undefined;
+  return typeof output.message === "string" ? output.message : undefined;
 }
 
 function parseOutput(output: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(output);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+    return isPlainObject(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

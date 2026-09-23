@@ -43,14 +43,12 @@ for (const file of sourceFiles(coreSource)) {
   }
 }
 
-for (const packageSource of [join(root, "packages/react/src"), join(root, "packages/wc/src"), join(root, "apps/demo/src")]) {
+for (const packageSource of [join(root, "packages/react/src"), join(root, "packages/surface/src"), join(root, "packages/wc/src"), join(root, "apps/demo/src")]) {
   for (const file of sourceFiles(packageSource)) {
     const text = readFileSync(file, "utf8");
     if (/from ["']@jarvis-viz\/core\//.test(text) || /packages\/core\/src/.test(text)) fail(file, "consumers must import the core public entry point");
     if (/from ["'][^"']*server\//.test(text)) fail(file, "browser packages must not import the Bun server");
-    if (!packageSource.includes(`${join("apps", "demo")}`) && /from ["'](?:xstate|@xstate\/react)["']/.test(text)) {
-      fail(file, "XState must not appear outside the demo");
-    }
+    if (/from ["'](?:xstate|@xstate\/react)["']/.test(text)) fail(file, "XState is not part of this workspace");
   }
 }
 
@@ -69,7 +67,6 @@ function packageManifests(directory) {
 }
 
 for (const file of packageManifests(root)) {
-  const rel = relative(root, file);
   const manifest = JSON.parse(readFileSync(file, "utf8"));
   const named = {
     ...manifest.dependencies,
@@ -78,9 +75,7 @@ for (const file of packageManifests(root)) {
     ...manifest.peerDependencies,
   };
   for (const dep of ["xstate", "@xstate/react"]) {
-    if (named[dep] && rel !== "apps/demo/package.json") {
-      fail(file, `${dep} is allowed only in apps/demo/package.json`);
-    }
+    if (named[dep]) fail(file, `${dep} is not a dependency of this workspace`);
   }
 }
 

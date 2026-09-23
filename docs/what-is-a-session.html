@@ -116,7 +116,7 @@
         <section id="budget">
           <p class="label">Limits and delegation</p><h2>The session budget limits creation requests.</h2>
           <p>The BFF applies per-origin rate and session budgets, and it caps concurrent lifetime streams per origin. Those counters do not limit conversation duration. MAX_OUTPUT_TOKENS limits delegated Responses output, not spoken audio. Voice usage is cumulative; do not sum usage snapshots.</p>
-          <p>GPT Live-1 handles speech. A separately configured Responses model reasons and chooses the bounded perform_ui_actions tool. The browser validates and executes those actions. Speech can overlap backend work and does not cancel it. Captions retain independent user and assistant fragments and timestamps.</p>
+          <p>GPT Live-1 handles speech. A separately configured Responses model reasons and chooses the bounded request_ui_changes tool. The browser interprets each request sentence and runs the command it decodes. Speech can overlap backend work and does not cancel it. Captions retain independent user and assistant fragments and timestamps.</p>
           <p>See <a href="architecture.html">Jarvis architecture</a> for module ownership and simulation behavior.</p>
         </section>
       </main>

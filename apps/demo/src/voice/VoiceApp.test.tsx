@@ -2,6 +2,7 @@
 import { StrictMode, act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SIMULATION_TABLE, createSimulatedInterpret } from "./runner-source.js";
 import { VoiceApp } from "./VoiceApp.js";
 
 function stubBrowser(): void {
@@ -113,28 +114,92 @@ function namedLink(host: HTMLElement, label: string): HTMLAnchorElement {
   return link;
 }
 
+function testId(host: HTMLElement, id: string): string {
+  return host.querySelector(`[data-testid="${id}"]`)?.textContent ?? "";
+}
+
+/** A fake Live data channel plus the peer connection that hands it to the OpenAI transport. */
+function stubLivePeer() {
+  let deliver: ((event: { data: string }) => void) | undefined;
+  const sent: string[] = [];
+  const channel = {
+    readyState: "open",
+    send(data: string) { sent.push(data); },
+    close() {},
+    addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
+  };
+  vi.stubGlobal("RTCPeerConnection", class {
+    iceGatheringState = "complete";
+    localDescription = { type: "offer", sdp: "v=0" };
+    addEventListener() {} addTrack() {} close() {}
+    createDataChannel() { return channel; }
+    async createOffer() { return this.localDescription; }
+    async setLocalDescription() {}
+    async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
+  });
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
+  return {
+    send: (event: unknown) => deliver?.({ data: JSON.stringify(event) }),
+    functionOutput(): Record<string, unknown> {
+      for (const raw of sent) {
+        const message: unknown = JSON.parse(raw);
+        if (typeof message !== "object" || message === null) continue;
+        const item = (message as { item?: { type?: string; output?: string } }).item;
+        if (item?.type === "function_call_output" && typeof item.output === "string") {
+          return JSON.parse(item.output) as Record<string, unknown>;
+        }
+      }
+      throw new Error("no function output was submitted");
+    },
+  };
+}
+
+function sendUiRequest(peer: ReturnType<typeof stubLivePeer>, callId: string, requests: string[]): void {
+  peer.send({ type: "response.event", delegation_id: "delegation_1", event: { type: "response.created", response: { id: "resp_1", output: [] } } });
+  peer.send({
+    type: "response.event",
+    delegation_id: "delegation_1",
+    event: { type: "response.output_item.done", item: { type: "function_call", call_id: callId, name: "request_ui_changes", arguments: JSON.stringify({ requests }) } },
+  });
+  peer.send({ type: "response.event", delegation_id: "delegation_1", event: { type: "response.completed", response: { id: "resp_1", output: [] } } });
+}
+
 const mounted = new Map<ReturnType<typeof createRoot>, HTMLElement>();
 
-async function mountApp(): Promise<{ host: HTMLElement; root: ReturnType<typeof createRoot>; seenStates: Set<string> }> {
+async function mountApp(): Promise<{ host: HTMLElement; root: ReturnType<typeof createRoot>; seenPhases: Set<string>; seenRequests: Set<string> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted.set(root, host);
-  const seenStates = new Set<string>();
+  const seenPhases = new Set<string>();
+  const seenRequests = new Set<string>();
   const observer = new MutationObserver(() => {
-    const state = host.querySelector('[data-testid="activity-state"]')?.textContent;
-    if (state) seenStates.add(state);
+    const phase = host.querySelector('[data-testid="activity-state"]')?.textContent;
+    if (phase) seenPhases.add(phase);
+    const request = host.querySelector('[data-testid="activity-request"]')?.textContent;
+    if (request) seenRequests.add(request);
   });
   await act(async () => { root.render(<StrictMode><VoiceApp /></StrictMode>); });
   const activity = host.querySelector(".activity");
   if (activity) observer.observe(activity, { subtree: true, characterData: true, childList: true });
-  return { host, root, seenStates };
+  return { host, root, seenPhases, seenRequests };
 }
 
 async function unmountApp(root: ReturnType<typeof createRoot>, host: HTMLElement): Promise<void> {
   mounted.delete(root);
   await act(async () => { root.unmount(); });
   host.remove();
+}
+
+async function playScript(host: HTMLElement, label: string): Promise<void> {
+  await act(async () => { namedButton(host, ".scripts", label).click(); });
+  await settle();
+}
+
+async function connectOpenAi(host: HTMLElement): Promise<void> {
+  await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
+  await act(async () => { namedButton(host, ".session", "Connect").click(); });
+  await settle();
 }
 
 describe("VoiceApp", () => {
@@ -160,67 +225,99 @@ describe("VoiceApp", () => {
     await act(async () => { namedLink(host, "library").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await settle();
     expect(host.querySelector("#library-title")).not.toBeNull();
-    expect(host.querySelector('[data-testid="activity-state"]')?.textContent).toBe("ready");
+    expect(testId(host, "activity-state")).toBe("idle");
     await unmountApp(root, host);
   });
 
-  it("runs a simulated voice navigation and a compound navigate-then-scroll", async () => {
-    const { host, root, seenStates } = await mountApp();
+  it("runs a simulated navigation and reports the phases it passed through", async () => {
+    const { host, root, seenPhases, seenRequests } = await mountApp();
     expect(namedButton(host, ".toolbar", "Simulation").className).toBe("active");
-    await act(async () => { namedButton(host, ".scripts", "Open the library").click(); });
-    await settle();
+    await playScript(host, "Open the library");
     expect(host.querySelector("#library-title")).not.toBeNull();
-    await act(async () => { namedButton(host, ".scripts", "Open article and scroll").click(); });
-    await settle();
+    expect(testId(host, "activity-result")).toBe("Opened the library page.");
+    expect([...seenRequests]).toContain("go to the library page");
+    expect(testId(host, "activity-results")).toBe("done");
+    expect(testId(host, "activity-added")).toMatch(/ms$/);
+    expect(host.querySelector(".live")?.textContent).toBe("Opened the library page.");
+    expect([...seenPhases].sort()).toEqual(["executing", "idle", "interpreting"]);
+    await unmountApp(root, host);
+  });
+
+  it("runs a compound navigate-then-scroll and a scroll to the bottom", async () => {
+    const { host, root } = await mountApp();
+    await playScript(host, "Open article and scroll");
     expect(host.querySelector("#article-title")).not.toBeNull();
     const article = host.querySelector("[data-voice-id='article.content']");
-    expect(article).toBeInstanceOf(HTMLElement);
-    if (article instanceof HTMLElement) expect(article.scrollTop).toBe(240);
-    expect(host.querySelector('[data-testid="activity-result"]')?.textContent).not.toBe("none");
-    expect(seenStates.has("validating") || seenStates.has("executing") || seenStates.has("reporting")).toBe(true);
-    expect(host.querySelector('[data-testid="activity-state"]')?.textContent).toBe("ready");
+    if (!(article instanceof HTMLElement)) throw new Error("missing article region");
+    expect(article.scrollTop).toBe(240);
+    expect(testId(host, "activity-results")).toBe("done, done");
+    await playScript(host, "Scroll article to the bottom");
+    expect(article.scrollTop).toBe(article.scrollHeight);
+    expect(testId(host, "activity-result")).toBe("Opened the article page. Scrolled to the bottom.");
     await unmountApp(root, host);
   });
 
-  it("selects a library item, opens and closes the drawer, and focuses search", async () => {
+  it("selects Atlas, opens and closes the details panel, and focuses search by voice", async () => {
+    const { host, root } = await mountApp();
+    await playScript(host, "Select Atlas");
+    const atlas = [...host.querySelectorAll(".page button")].find((node) => node.textContent?.startsWith("Atlas"));
+    expect(atlas?.getAttribute("aria-pressed")).toBe("true");
+    expect(testId(host, "activity-result")).toBe("Opened the library page. Selected Atlas.");
+    await playScript(host, "Open library details");
+    expect(host.querySelector("#details-title")).not.toBeNull();
+    await playScript(host, "Close library details");
+    expect(host.querySelector("#details-title")).toBeNull();
+    expect(testId(host, "activity-result")).toBe("Closed the details panel.");
+    await playScript(host, "Focus search");
+    expect(document.activeElement).toBe(host.querySelector("input[name='dashboard-search']"));
+    expect(testId(host, "activity-result")).toBe("Opened the dashboard page. Focused search.");
+    await unmountApp(root, host);
+  });
+
+  it("bookmarks the article by voice and leaves a repeated request without effect", async () => {
+    const { host, root } = await mountApp();
+    await playScript(host, "Bookmark the article");
+    expect(namedButton(host, ".page", "Bookmarked")).toBeInstanceOf(HTMLButtonElement);
+    expect(testId(host, "activity-result")).toBe("Opened the article page. Bookmarked the article.");
+    await playScript(host, "Bookmark the article");
+    expect(testId(host, "activity-results")).toBe("done, no_effect");
+    expect(testId(host, "activity-result")).toBe("Opened the article page. The article is already bookmarked.");
+    await unmountApp(root, host);
+  });
+
+  it("selects cards, the drawer, and the theme from pointer clicks", async () => {
     const { host, root } = await mountApp();
     await act(async () => { namedLink(host, "library").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await settle();
     const atlas = [...host.querySelectorAll(".page button")].find((node) => node.textContent?.startsWith("Atlas"));
     if (!(atlas instanceof HTMLButtonElement)) throw new Error("missing Atlas card");
     await act(async () => { atlas.click(); });
-    await settle();
     expect(atlas.getAttribute("aria-pressed")).toBe("true");
     await act(async () => { namedButton(host, ".page", "Open details").click(); });
-    await settle();
     expect(host.querySelector("#details-title")).not.toBeNull();
     await act(async () => { namedButton(host, ".page", "Close details").click(); });
-    await settle();
     expect(host.querySelector("#details-title")).toBeNull();
-    await act(async () => { namedLink(host, "dashboard").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    await settle();
-    const search = host.querySelector("input[name='dashboard-search']");
-    await act(async () => { namedButton(host, ".page", "Focus search").click(); });
-    await settle();
-    expect(document.activeElement).toBe(search);
-    await unmountApp(root, host);
-  });
-
-  it("changes theme and bookmarks from the same actor path", async () => {
-    const { host, root } = await mountApp();
     await act(async () => { namedLink(host, "settings").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await settle();
     await act(async () => { namedButton(host, ".page", "light").click(); });
-    await settle();
     expect(document.documentElement.dataset.theme).toBe("light");
-    await act(async () => { namedLink(host, "article").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    await settle();
-    const bookmark = namedButton(host, ".page", "Bookmark");
-    bookmark.focus();
-    await act(async () => { bookmark.click(); });
-    await settle();
-    expect(namedButton(host, ".page", "Bookmarked")).toBeInstanceOf(HTMLButtonElement);
+    await act(async () => { namedButton(host, ".page", "system").click(); });
+    expect(document.documentElement.dataset.theme).toBe("system");
+    expect(testId(host, "activity-state")).toBe("idle");
     await unmountApp(root, host);
+  });
+
+  it("answers an ordinary question without mutating UI state and cleans up on unmount", async () => {
+    const { host, root } = await mountApp();
+    await playScript(host, "Ask an ordinary question");
+    expect(host.querySelector("#dashboard-title")).not.toBeNull();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(testId(host, "activity-result")).toBe("none");
+    await unmountApp(root, host);
+    expect(cancelAnimationFrame).toHaveBeenCalled();
+    window.location.hash = "#/library";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(document.body.contains(host)).toBe(false);
   });
 
   it("posts the session endpoint when Connect is clicked in live mode", async () => {
@@ -285,33 +382,17 @@ describe("VoiceApp", () => {
   });
 
   it.each(["close timeout", "server loss"])("keeps %s visible and unlocks connection controls", async (reason) => {
-    let deliver: ((event: { data: string }) => void) | undefined;
     let lifetime: ReturnType<typeof lifetimeResponse> | undefined;
     vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => {
       if (init?.method === "POST") return Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } });
       lifetime = lifetimeResponse(init?.signal);
       return lifetime.response;
     }));
-    const channel = {
-      readyState: "open",
-      send() {}, close() {},
-      addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
-    };
-    vi.stubGlobal("RTCPeerConnection", class {
-      iceGatheringState = "complete";
-      localDescription = { type: "offer", sdp: "v=0" };
-      addEventListener() {} addTrack() {} close() {}
-      createDataChannel() { return channel; }
-      async createOffer() { return this.localDescription; }
-      async setLocalDescription() {}
-      async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
-    });
+    stubLivePeer();
     const stopMicrophone = vi.fn();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: stopMicrophone }] }) } });
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
-    await act(async () => { namedButton(host, ".session", "Connect").click(); });
-    await settle();
+    await connectOpenAi(host);
     if (reason === "close timeout") {
       await act(async () => { namedButton(host, ".session", "Disconnect").click(); });
       expect(namedButton(host, ".session", "Finishing…").disabled).toBe(true);
@@ -326,32 +407,16 @@ describe("VoiceApp", () => {
   });
 
   it("tears down a connected live source when Simulation is picked again", async () => {
-    let deliver: ((event: { data: string }) => void) | undefined;
     const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => init?.method === "POST"
       ? Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } })
       : lifetimeResponse(init?.signal).response);
     vi.stubGlobal("fetch", fetchMock);
-    const channel = {
-      readyState: "open",
-      send() {}, close() {},
-      addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
-    };
-    vi.stubGlobal("RTCPeerConnection", class {
-      iceGatheringState = "complete";
-      localDescription = { type: "offer", sdp: "v=0" };
-      addEventListener() {} addTrack() {} close() {}
-      createDataChannel() { return channel; }
-      async createOffer() { return this.localDescription; }
-      async setLocalDescription() {}
-      async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
-    });
+    stubLivePeer();
     const stopMicrophone = vi.fn();
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: stopMicrophone }] }) } });
     const posts = () => fetchMock.mock.calls.filter((call) => call[1]?.method === "POST").length;
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
-    await act(async () => { namedButton(host, ".session", "Connect").click(); });
-    await settle();
+    await connectOpenAi(host);
     expect(namedButton(host, ".session", "Disconnect")).toBeInstanceOf(HTMLButtonElement);
     const liveCanvas = host.querySelector(".stage canvas");
     expect(liveCanvas).toBeInstanceOf(HTMLCanvasElement);
@@ -360,54 +425,63 @@ describe("VoiceApp", () => {
     await settle();
     expect(stopMicrophone).toHaveBeenCalledOnce();
     expect(document.body.contains(liveCanvas)).toBe(false);
-    expect(host.querySelector(".stage canvas")).not.toBe(liveCanvas);
     expect(namedButton(host, ".scripts", "Open the library")).toBeInstanceOf(HTMLButtonElement);
     expect(posts()).toBe(posted);
     await unmountApp(root, host);
   });
 
-  it("shows rejected commands and failed backend responses without dropping the live session", async () => {
-    let deliver: ((event: { data: string }) => void) | undefined;
-    vi.stubGlobal("fetch", vi.fn(async (_input: unknown, init?: RequestInit) => init?.method === "POST"
-      ? Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } })
-      : lifetimeResponse(init?.signal).response));
-    const channel = {
-      readyState: "open",
-      send() {}, close() {},
-      addEventListener(name: string, listener: (event: { data: string }) => void) { if (name === "message") deliver = listener; },
-    };
-    vi.stubGlobal("RTCPeerConnection", class {
-      iceGatheringState = "complete";
-      localDescription = { type: "offer", sdp: "v=0" };
-      addEventListener() {} addTrack() {} close() {}
-      createDataChannel() { return channel; }
-      async createOffer() { return this.localDescription; }
-      async setLocalDescription() {}
-      async setRemoteDescription() { deliver?.({ data: JSON.stringify({ type: "session.started" }) }); }
-    });
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
+  it("keeps the live session open when an interpret request fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown, init?: RequestInit) => {
+      if (String(input).endsWith("/interpret")) return new Response(JSON.stringify({ error: "Interpretation is not configured" }), { status: 503 });
+      if (init?.method === "POST") return Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } });
+      return lifetimeResponse(init?.signal).response;
+    }));
+    const peer = stubLivePeer();
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".toolbar", "OpenAI").click(); });
-    await act(async () => { namedButton(host, ".session", "Connect").click(); });
-    await settle();
-    const send = (event: unknown) => deliver?.({ data: JSON.stringify(event) });
-
-    await act(async () => { send({ type: "error", error: { type: "invalid_request_error", code: "unknown_parameter", message: "Unknown parameter", client_event_id: "evt_1" } }); });
+    await connectOpenAi(host);
+    await act(async () => { peer.send({ type: "error", error: { type: "invalid_request_error", code: "unknown_parameter", message: "Unknown parameter", client_event_id: "evt_1" } }); });
     expect(host.querySelector(".toolbar span")?.textContent).toBe("Unknown parameter");
-
-    await act(async () => {
-      send({ type: "response.event", delegation_id: "delegation_1", event: { type: "response.created", response: { id: "resp_1", output: [] } } });
-      send({ type: "response.event", delegation_id: "delegation_1", event: { type: "response.failed", response: { id: "resp_1" } } });
-    });
-    expect(host.querySelector(".toolbar span")?.textContent).toBe("Backend response failed");
+    await act(async () => { sendUiRequest(peer, "call_failed", ["go to the library page"]); });
+    await settle();
+    expect(testId(host, "activity-results")).toBe("interpret_failed");
+    expect(testId(host, "activity-result")).toBe("I could not work out what to change.");
+    expect(host.querySelector(".live")?.textContent).toBe("I could not work out what to change.");
+    expect(peer.functionOutput()).toMatchObject({ ok: false, results: [{ request: "go to the library page", status: "interpret_failed" }] });
+    expect(host.querySelector("#dashboard-title")).not.toBeNull();
     expect(namedButton(host, ".session", "Disconnect").disabled).toBe(false);
+    await unmountApp(root, host);
+  });
+
+  it("asks which card an ambiguous request means", async () => {
+    const interpret = createSimulatedInterpret(SIMULATION_TABLE);
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown, init?: RequestInit) => {
+      if (String(input).endsWith("/interpret")) {
+        const compiled = JSON.parse(String(init?.body));
+        return Response.json({ model: "jev-1.13.0", ...await interpret(compiled, new AbortController().signal) });
+      }
+      if (init?.method === "POST") return Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } });
+      return lifetimeResponse(init?.signal).response;
+    }));
+    const peer = stubLivePeer();
+    const { host, root } = await mountApp();
+    await connectOpenAi(host);
+    await act(async () => { namedLink(host, "library").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await settle();
+    await act(async () => { sendUiRequest(peer, "call_unclear", ["select a library card"]); });
+    await settle();
+    expect(testId(host, "activity-results")).toBe("unclear");
+    expect(testId(host, "activity-result")).toBe("Which one: Atlas or Beacon?");
+    expect(peer.functionOutput()).toMatchObject({
+      ok: false,
+      message: "Which one: Atlas or Beacon?",
+      results: [{ request: "select a library card", status: "unclear", candidates: ["Atlas", "Beacon"] }],
+    });
     await unmountApp(root, host);
   });
 
   it("replays a simulated script after a source round trip", async () => {
     const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".scripts", "Open the library").click(); });
-    await settle();
+    await playScript(host, "Open the library");
     expect(host.querySelector("#library-title")).not.toBeNull();
     await act(async () => { namedLink(host, "dashboard").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await settle();
@@ -416,23 +490,8 @@ describe("VoiceApp", () => {
     await settle();
     await act(async () => { namedButton(host, ".toolbar", "Simulation").click(); });
     await settle();
-    await act(async () => { namedButton(host, ".scripts", "Open the library").click(); });
-    await settle();
+    await playScript(host, "Open the library");
     expect(host.querySelector("#library-title")).not.toBeNull();
     await unmountApp(root, host);
-  });
-
-  it("answers an ordinary question without mutating UI state and cleans up on unmount", async () => {
-    const { host, root } = await mountApp();
-    await act(async () => { namedButton(host, ".scripts", "Ask an ordinary question").click(); });
-    await settle();
-    expect(host.querySelector("#dashboard-title")).not.toBeNull();
-    expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(host.querySelector('[data-testid="activity-result"]')?.textContent).toBe("none");
-    await unmountApp(root, host);
-    expect(cancelAnimationFrame).toHaveBeenCalled();
-    window.location.hash = "#/library";
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
-    expect(document.body.contains(host)).toBe(false);
   });
 });

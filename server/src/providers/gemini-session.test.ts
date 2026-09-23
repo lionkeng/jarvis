@@ -83,8 +83,8 @@ describe("createGeminiLiveGrant", () => {
     expect(locked.contextWindowCompression).toEqual({ slidingWindow: {} });
     expect(locked.generationConfig.responseModalities).toEqual(["AUDIO"]);
     expect(locked.generationConfig.speechConfig).toEqual({ voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } });
-    expect(locked.systemInstruction.parts[0]?.text).toContain("perform_ui_actions");
-    expect(locked.tools[0]?.functionDeclarations[0]?.name).toBe("perform_ui_actions");
+    expect(locked.systemInstruction.parts[0]?.text).toContain("request_ui_changes");
+    expect(locked.tools[0]?.functionDeclarations[0]?.name).toBe("request_ui_changes");
   });
 
   test("adds thinkingLevel and NON_BLOCKING only on the extended model", async () => {

@@ -8,7 +8,8 @@ const geminiProvider: LiveProviderConfig = { protocol: "gemini-live", apiKey: "g
 const config: ServerConfig = {
   providers: [openAIProvider], allowedOrigins: ["https://voice.example"], port: 3010,
   rateLimitRequests: 1, rateLimitWindowMs: 60_000, sessionBudgetRequests: 10, sessionBudgetWindowMs: 3_600_000,
-  lifetimeStreamsPerOrigin: 4,
+  lifetimeStreamsPerOrigin: 4, typesafe: undefined,
+  interpretRateLimitRequests: 120, interpretRateLimitWindowMs: 60_000,
 };
 const dualConfig: ServerConfig = { ...config, providers: [openAIProvider, geminiProvider] };
 const geminiPost = (body: unknown = GEMINI_POST_BODY) => new Request("http://localhost/session", {

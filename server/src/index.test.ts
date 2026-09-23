@@ -6,7 +6,8 @@ const baseConfig: ServerConfig = {
   providers: [{ protocol: "openai-live", apiKey: "test-only", model: "gpt-live-1", backendModel: "gpt-5.6-luna", maxOutputTokens: 128 }],
   allowedOrigins: ["http://localhost:5180"], port: 30_000,
   rateLimitRequests: 2, rateLimitWindowMs: 1000, sessionBudgetRequests: 2, sessionBudgetWindowMs: 1000,
-  lifetimeStreamsPerOrigin: 4,
+  lifetimeStreamsPerOrigin: 4, typesafe: undefined,
+  interpretRateLimitRequests: 120, interpretRateLimitWindowMs: 60_000,
 };
 
 test("serves with an idle timeout longer than the lifetime heartbeat", () => {
@@ -43,6 +44,13 @@ test("built server shape responds across a real Bun HTTP listener", async () => 
     expect(await health.json()).toEqual({ ok: true, runtime: "bun" });
     const rejected = await fetch(`${base}/session`, { method: "POST", headers: { Origin: "https://attacker.example" } });
     expect(rejected.status).toBe(403);
+    const interpretRejected = await fetch(`${base}/interpret`, { method: "POST", headers: { Origin: "https://attacker.example" }, body: "{}" });
+    expect(interpretRejected.status).toBe(403);
+    const unconfigured = await fetch(`${base}/interpret`, { method: "POST", headers: { Origin: "http://localhost:5180", "Content-Type": "application/json" }, body: "{}" });
+    expect(unconfigured.status).toBe(503);
+    expect(await unconfigured.json()).toEqual({ error: "Interpretation is not configured" });
+    const missing = await fetch(`${base}/nowhere`, { method: "GET" });
+    expect(missing.status).toBe(404);
   } finally {
     await server.stop(true);
   }

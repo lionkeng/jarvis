@@ -4,18 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite --port 5180",
-    "typecheck": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && tsc -p tsconfig.json --noEmit",
+    "dev": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... --filter @jarvis-viz/surface... build && vite --port 5180",
+    "typecheck": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... --filter @jarvis-viz/surface... build && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "build": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... build && vite build"
+    "build": "pnpm --filter @jarvis-viz/react... --filter @jarvis-viz/wc... --filter @jarvis-viz/surface... build && vite build"
   },
   "dependencies": {
     "@jarvis-viz/core": "workspace:*",
     "@jarvis-viz/react": "workspace:*",
+    "@jarvis-viz/surface": "workspace:*",
     "@jarvis-viz/wc": "workspace:*",
-    "@xstate/react": "^6.1.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "xstate": "^5.32.5"
+    "react-dom": "^19.2.0"
   }
 }
